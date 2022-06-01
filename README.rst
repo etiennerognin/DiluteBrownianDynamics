@@ -1,4 +1,5 @@
-# DiluteBrownianDynamics
+DiluteBrownianDynamics
+======================
 
 **Dilute Brownian Dynamics** simulation package written in Python, with readability and extensibility as the main goals.
 It is primarily intended for testing toy models in polymer science.
