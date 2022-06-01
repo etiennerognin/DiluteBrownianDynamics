@@ -1,0 +1,18 @@
+build
+dist
+*.egg-info
+# sphinx
+docs/_build
+docs/_static
+docs/_templates
+
+# Examples data
+examples/inputs
+examples/outputs
+
+**/*cache*
+
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+*.pyc
