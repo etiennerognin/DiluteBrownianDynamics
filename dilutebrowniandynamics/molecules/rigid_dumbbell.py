@@ -13,9 +13,24 @@ class RigidDumbbell:
     ----------
     Q : ndarry (3,)
         Coorinates of the vector.
+    tension : float
+        Internal tension.
+    rng : Generator
+        Random number generator.
+    dW : ndarray (3,)
+        Random forces.
+    dQ : ndarray (3,)
+        Evolution vector.
     """
     def __init__(self, Q):
         self.Q = Q
+        self.tension = None
+        self.rng = np.random.default_rng()
+        self.dW = self.rng.standard_normal(3)
+        # discard colinear part (note that dumbbell is unit vector)
+        Q_dot_dW = np.sum(self.Q*self.dW)
+        self.dW = self.dW - Q_dot_dW*self.Q
+        self.dQ = None
 
     @classmethod
     def from_normal_distribution(cls):
@@ -32,6 +47,39 @@ class RigidDumbbell:
         R = np.vstack((-self.Q[None, :]/2, self.Q[None, :]/2))
         return R
 
+    def solve(self, gradU, dt):
+        """Solve tension according to current random forces and constraints."""
+        A = (self.Q @ gradU)*dt + np.sqrt(dt/3)*self.dW
+        QdotA = np.sum(self.Q*A)
+        A2 = np.sum(A**2)
+        self.tension = 2*(QdotA + 1 - np.sqrt(1 + QdotA**2 - A2))/dt
+
+        self.dQ = (dt*(self.Q @ (gradU - 0.5*self.tension*np.eye(3)))
+                   + np.sqrt(dt/3)*self.dW)
+
+        new_Q = self.Q + self.dQ
+        if np.abs(np.sum(new_Q**2) - 1.) > LENGTH_TOL:
+            # Rigidity is broken
+            raise ValueError('Molecule length exceeded 1.')
+
+    def measure(self):
+        """Measure quantities from the systems.
+
+        Returns
+        -------
+        observables : dict
+            Dictionary of observables quantities.
+        """
+        if self.tension is None:
+            raise RuntimeError("Attempt to measure tension but tension not "
+                               "solved.")
+        # Molecurlar conformation tensor
+        A = np.outer(self.Q, self.Q)
+        # Molecular stress
+        S = np.outer(self.tension*self.Q, self.Q)
+        observables = {'A': A, 'S': S}
+        return observables
+
     def evolve(self, gradU, dt):
         """Evolve dumbbell by a time step dt. Itô calculus convention.
 
@@ -41,31 +89,11 @@ class RigidDumbbell:
             Velocity gradient, dvj/dxi convention.
         dt : float
             Time step.
-
-        Returns
-        -------
-        elemA, elemS : (3, 3) ndarray
-            Elementary conformation (QQ) and stress (QF)
         """
-        dW = np.sqrt(dt/3)*np.random.standard_normal(3)
+        self.Q += self.dQ
+        # draw new random forces
+        self.tension = None
+        self.dW = self.rng.standard_normal(3)
         # discard colinear part (note that dumbbell is unit vector)
-        Q_dot_dW = np.sum(self.Q*dW)
-        dW = dW - Q_dot_dW*self.Q
-
-        A = (self.Q @ gradU)*dt+dW
-        QdotA = np.sum(self.Q*A)
-        A2 = np.sum(A**2)
-        tension = 2*(QdotA+1-np.sqrt(1+QdotA**2-A2))/dt
-
-        dQ = dt*(self.Q @ (gradU - 0.5*tension*np.eye(3))) + dW
-
-        new_Q = self.Q + dQ
-
-        if np.abs(np.sum(new_Q**2) - 1.) > LENGTH_TOL:
-            # Rigidity is broken
-            raise ValueError('Molecule length exceeded 1.')
-
-        elemA = np.outer(self.Q, self.Q)
-        elemS = np.outer(self.Q, tension*self.Q)
-        self.Q = new_Q
-        return elemA, elemS
+        Q_dot_dW = np.sum(self.Q*self.dW)
+        self.dW = self.dW - Q_dot_dW*self.Q

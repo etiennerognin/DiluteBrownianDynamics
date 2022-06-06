@@ -26,20 +26,14 @@ def simulate_batch(molecules, gradU, n_rec, dt, n_proc=4):
 
     Returns
     -------
-    A : (Nrec, 3, 3) ndarray
-        Time series of the covariance estimator of the end-to-end vectors
-        (aka Conformation tensor).
-    S: (Nrec, 3, 3) ndarray
-        Time series of the estimator of the stress.
+    observables: dict
+        Dictionary of time series.
     molecules_out: list of Molecule objects
         List of molecules after the last time step.
     """
     n_ensemble = len(molecules)
 
     print("Physical time to compute:", n_rec*dt)
-    A = np.zeros((n_rec, 3, 3))
-    S = np.zeros((n_rec, 3, 3))
-    molecules_out = []
 
     simulate_para = partial(simulate,
                             gradU=gradU,
@@ -52,13 +46,12 @@ def simulate_batch(molecules, gradU, n_rec, dt, n_proc=4):
         results = list(tqdm.tqdm(p.imap(simulate_para, molecules),
                                  total=n_ensemble))
 
-    # Get elementary stress and add to compute estimators
-    for elemA, elemS, molecule in results:
-        A += elemA/n_ensemble
-        S += elemS/n_ensemble
-        molecules_out.append(molecule)
+    # Compute average and standard deviation of observables
+    observables_list = [obs for obs, molecule in results]
+    molecules_out = [molecule for obs, molecule in results]
+    observables = _statistics(observables_list)
 
-    return A, S, molecules_out
+    return observables, molecules_out
 
 
 def simulate(molecule, gradU, n_rec, dt, full_trajectory):
@@ -80,10 +73,8 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory):
 
     Returns
     -------
-    elemA : ndarray (n_rec, 3, 3)
-        Time series of elementary conformation QQ.
-    elemS: ndarray (n_rec, 3, 3)
-        Elementary stress.
+    observables : dict
+        Dictionary of measured quantities (depends on model)
     molecule_out: Molecule object
         Molecule after the last time step, or full list at each time step.
     """
@@ -91,9 +82,9 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory):
     # For parallel compatibility:
     np.random.seed()
 
-    # Trajectories.
-    elemA = np.zeros((n_rec, 3, 3))
-    elemS = np.zeros((n_rec, 3, 3))
+    # Data output
+    observables = []
+
     if full_trajectory:
         import copy
         trajectory = []
@@ -103,21 +94,27 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory):
     dt_local = dt
 
     for i in range(n_rec):
-        subit = 0   # Part of the time step job done
+        subit = 0.    # Part of the time step job done
+        subobs = []   # Collection of observables which will be averaged
+        weights = []
         while subit < dt:
 
             # Evaluate velocity gradient
             gradUt = gradU(i*dt+subit) if callable(gradU) else gradU
 
             try:
-                elemA_loc, elemS_loc = molecule.evolve(gradUt, dt_local)
+                # Solve internal tensions with constraints.
+                molecule.solve(gradUt, dt_local)
+                # Measure whatever the model is set to output.
+                subobs.append(molecule.measure())
+                weights.append(0.5**level)
+                if full_trajectory and subit == 0.:
+                    trajectory.append(copy.deepcopy(molecule))
+                # Evolve the model by one time step.
+                molecule.evolve(gradUt, dt_local)
 
                 # If this is a success, it means we can increment time:
                 subit += dt_local
-
-                # Averaging over sub-iterations (see variance in Ito calculus)
-                elemA[i] += elemA_loc/(2**level)
-                elemS[i] += elemS_loc/(2**level)
 
             except ValueError:
                 # Fail to evolve molecule. We subdivide the time step to
@@ -129,12 +126,66 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory):
                     raise RuntimeError("Convergence failed and maximum level "
                                        "of time step subdivision reached.")
 
-        if full_trajectory:
-            trajectory.append(copy.deepcopy(molecule))
+        observables.append(_sum_dict(subobs, weights))
+
         if level > 0:
             level += -1
             dt_local = dt/2**level
+
+    observables = _dict_series(observables)
     if full_trajectory:
-        return elemA, elemS, trajectory
+        return observables, trajectory
     else:
-        return elemA, elemS, molecule
+        return observables, molecule
+
+
+def _sum_dict(dicts, weights):
+    """Sum a collection of obsevables according to weights.
+
+    Parameters
+    ----------
+    dicts : list of dict
+        List of dictionaries which should all have the same data structure.
+    weights : list of float
+        List of weights for averaging
+
+    Returns
+    -------
+    dict
+        Average dictionary"""
+    average = {}
+    for key in dicts[0].keys():
+        weighted_values = [w*dict_[key] for w, dict_ in zip(weights, dicts)]
+        average[key] = np.sum(weighted_values, axis=0)
+    return average
+
+
+def _dict_series(dicts):
+    """Concatenate dictionaries of ndarrays along a new axis.
+
+    Returns
+    -------
+    dict
+        Dictionary of time series.
+    """
+    series = {}
+    for key in dicts[0].keys():
+        series[key] = np.array([dict_[key] for dict_ in dicts])
+    return series
+
+
+def _statistics(dicts):
+    """Computes statistics from a list of dicts.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the statistics. `key_average` for the averaged
+        values, `key_std` for standard deviation.
+    """
+    statistics = {}
+    for key in dicts[0].keys():
+        frame = np.array([dict_[key] for dict_ in dicts])
+        statistics[f"{key}_average"] = np.average(frame, axis=0)
+        statistics[f"{key}_std"] = np.std(frame, axis=0)
+    return statistics

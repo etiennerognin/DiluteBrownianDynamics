@@ -14,10 +14,22 @@ class FENEDumbbell:
         Coorinates of the vector.
     L_max : float
         Maximim dumbbell length
+    tension : float
+        Internal tension.
+    rng : Generator
+        Random number generator.
+    dW : ndarray (3,)
+        Random forces.
+    dQ : ndarray (3,)
+        Evolution vector.
     """
     def __init__(self, Q, L_max):
         self.Q = Q
         self.L_max = L_max
+        self.tension = None
+        self.rng = np.random.default_rng()
+        self.dW = self.rng.standard_normal(3)
+        self.dQ = None
 
     @classmethod
     def from_normal_distribution(cls, L_max):
@@ -36,6 +48,36 @@ class FENEDumbbell:
         R = np.vstack((-self.Q[None, :]/2, self.Q[None, :]/2))
         return R
 
+    def solve(self, gradU, dt):
+        """Solve tension according to current random forces and constraints."""
+        self.tension = self.L_max**2/(self.L_max**2-np.sum(self.Q**2))
+
+        self.dQ = (dt*(self.Q @ (gradU - 0.5*self.tension*np.eye(3)))
+                   + np.sqrt(dt/3)*self.dW)
+
+        new_Q = self.Q + self.dQ
+        if np.sum(new_Q**2) > self.L_max**2 - LENGTH_TOL:
+            # Finite extensibility is broken
+            raise ValueError('Molecule length exceeded L_max.')
+
+    def measure(self):
+        """Measure quantities from the systems.
+
+        Returns
+        -------
+        observables : dict
+            Dictionary of observables quantities.
+        """
+        if self.tension is None:
+            raise RuntimeError("Attempt to measure tension but tension not "
+                               "solved.")
+        # Molecurlar conformation tensor
+        A = np.outer(self.Q, self.Q)
+        # Molecular stress
+        S = np.outer(self.tension*self.Q, self.Q)
+        observables = {'A': A, 'S': S}
+        return observables
+
     def evolve(self, gradU, dt):
         """Evolve dumbbell by a time step dt. Itô calculus convention.
 
@@ -45,23 +87,8 @@ class FENEDumbbell:
             Velocity gradient, dvj/dxi convention.
         dt : float
             Time step.
-
-        Returns
-        -------
-        elemA, elemS : (3, 3) ndarray
-            Elementary conformation (QQ) and stress (QF)
         """
-        dW = np.sqrt(dt/3)*np.random.standard_normal(3)
-        tension = self.L_max**2/(self.L_max**2-np.sum(self.Q**2))
-
-        dQ = dt*(self.Q @ (gradU - 0.5*tension*np.eye(3))) + dW
-
-        new_Q = self.Q + dQ
-        if np.sum(new_Q**2) > self.L_max**2 - LENGTH_TOL:
-            # Finite extensibility is broken
-            raise ValueError('Molecule length exceeded L_max.')
-        else:
-            self.Q = new_Q
-        elemA = np.outer(self.Q, self.Q)
-        elemS = np.outer(self.Q, tension*self.Q)
-        return elemA, elemS
+        self.Q += self.dQ
+        # draw new random forces
+        self.tension = None
+        self.dW = self.rng.standard_normal(3)

@@ -13,6 +13,6 @@ import numpy as np
 #     results = list(p.imap(partial(foo, arg2=1, arg3=2), args_list))
 # print(*results)
 
-a=[10,23]
-b=f"{a[:]}"
+a=(3,3)
+b=(1,)+a
 print(b)

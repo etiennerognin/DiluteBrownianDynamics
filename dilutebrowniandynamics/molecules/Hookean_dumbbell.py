@@ -10,9 +10,21 @@ class HookeanDumbbell:
     ----------
     Q : ndarray (3,)
         Coorinates of the dumbbell vector.
+    tension : float
+        Internal tension.
+    rng : Generator
+        Random number generator.
+    dW : ndarray (3,)
+        Random forces.
+    dQ : ndarray (3,)
+        Evolution vector
     """
     def __init__(self, Q):
         self.Q = Q
+        self.tension = None
+        self.rng = np.random.default_rng()
+        self.dW = self.rng.standard_normal(3)
+        self.dQ = None
 
     @classmethod
     def from_normal_distribution(cls):
@@ -28,7 +40,30 @@ class HookeanDumbbell:
         R = np.vstack((-self.Q[None, :]/2, self.Q[None, :]/2))
         return R
 
-    def evolve(self, gradUt, dt):
+    def solve(self, gradU, dt):
+        """Solve tension according to current random forces and constraints."""
+        self.tension = 1.
+        self.dQ = dt*(self.Q @ (gradU - 0.5*np.eye(3))) + np.sqrt(dt/3)*self.dW
+
+    def measure(self):
+        """Measure quantities from the systems.
+
+        Returns
+        -------
+        observables : dict
+            Dictionary of observables quantities.
+        """
+        if self.tension is None:
+            raise RuntimeError("Attempt to measure tension but tension not "
+                               "solved.")
+        # Molecurlar conformation tensor
+        A = np.outer(self.Q, self.Q)
+        # Molecular stress
+        S = np.outer(self.Q, self.Q)
+        observables = {'A': A, 'S': S}
+        return observables
+
+    def evolve(self, gradU, dt):
         """Evolve dumbbell by a time step dt. Itô calculus convention.
 
         Parameters
@@ -37,14 +72,8 @@ class HookeanDumbbell:
             Velocity gradient, dvj/dxi convention.
         dt : float
             Time step.
-
-        Returns
-        -------
-        elemA, elemS : (3, 3) ndarray
-            Elementary conformation (QQ) and stress (QF)
         """
-        dW = np.sqrt(dt/3)*np.random.standard_normal(3)
-        elemA = np.outer(self.Q, self.Q)
-        elemS = np.outer(self.Q, self.Q)
-        self.Q += dt*(self.Q @ (gradUt - 0.5*np.eye(3))) + dW
-        return elemA, elemS
+        self.Q += self.dQ
+        # draw new random forces
+        self.tension = None
+        self.dW = self.rng.standard_normal(3)

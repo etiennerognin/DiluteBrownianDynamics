@@ -18,10 +18,37 @@ class KramersChain:
     ----------
     Q : ndarry (N, 3)
         Coorinates of the vectors.
+    tensions : ndarray (N,)
+        Internal tensions.
+    rng : Generator
+        Random number generator.
+    dW : ndarray (N, 3)
+        Random forces.
+    dQ : ndarray (N, 3)
+        Evolution vector.
     """
     def __init__(self, Q):
         self.Q = Q
-        self._tensions = None
+        self.tensions = None
+        self.rng = np.random.default_rng()
+
+        # Uncorrelated forces on beads...
+        Prior = self.rng.standard_normal((len(Q)+1, 3))
+
+        if FILTER_NOISE:
+            # -- Noise reduction:
+            # For inner beads, keep component that is only normal to both links
+            vN = np.cross(self.Q[1:], self.Q[:-1])
+            vN2 = np.sum(vN**2, axis=1)
+            Prior[1:-1] = (np.sum(Prior[1:-1]*vN, axis=1)[:, None]*vN
+                           / vN2[:, None])
+            # For start and end, just normal to the link
+            Prior[0] = Prior[0] - (np.sum(Prior[0]*self.Q[0]) * self.Q[0])
+            Prior[-1] = Prior[-1] - (np.sum(Prior[-1]*self.Q[-1]) * self.Q[-1])
+
+        # ...gives correlated Brownian force on rods:
+        self.dW = Prior[1:] - Prior[:-1]
+        self.dQ = None
 
     def __len__(self):
         """Number of links in the chain"""
@@ -60,8 +87,8 @@ class KramersChain:
         """End-to-end vector"""
         return np.sum(self.Q, axis=0)
 
-    def evolve(self, gradU, dt):
-        """Evolve chain by a time step dt. Itô calculus convention.
+    def solve(self, gradU, dt):
+        """Solve tension according to current random forces and constraints.
 
         Parameters
         ----------
@@ -70,11 +97,6 @@ class KramersChain:
         dt : float
             Time step.
 
-        Returns
-        -------
-        elemA, elemS : (3, 3) ndarray
-            Elementary conformation (QQ) and stress (QF)
-
         Notes
         -----
         Scipy `linalg.lapack.dptsv` which does partial Gauss pivoting seems
@@ -82,24 +104,8 @@ class KramersChain:
         from 'Numerical Recipes' tridiagonal solver, which doesn't do pivoting
         and requires smaller time step.
         """
-        # Uncorrelated forces on beads...
-        Prior = np.sqrt(2*dt)*np.random.standard_normal((len(self)+1, 3))
-
-        if FILTER_NOISE:
-            # -- Noise reduction:
-            # For inner beads, keep component that is only normal to both links
-            vN = np.cross(self.Q[1:], self.Q[:-1])
-            vN2 = np.sum(vN**2, axis=1)
-            Prior[1:-1] = (np.sum(Prior[1:-1]*vN, axis=1)[:, None]*vN
-                           / vN2[:, None])
-            # For start and end, just normal to the link
-            Prior[0] = Prior[0] - (np.sum(Prior[0]*self.Q[0]) * self.Q[0])
-            Prior[-1] = Prior[-1] - (np.sum(Prior[-1]*self.Q[-1]) * self.Q[-1])
-
-        # ...gives correlated Brownian force on rods:
-        dW = Prior[1:]-Prior[:-1]
-
         # Right hand side
+        dW = np.sqrt(2*dt)*self.dW
         Q_gradU = self.Q @ gradU
         Q_gradU_Q = np.sum(Q_gradU*self.Q, axis=1)
         dW_dot_Q = np.sum(dW*self.Q, axis=1)
@@ -148,20 +154,65 @@ class KramersChain:
             if err < LENGTH_TOL:
                 # Re normalise and exit loop
                 new_Q = new_Q/np.sqrt(L[:, None])
+                dQ = new_Q - self.Q
                 break
             elif i == MAXITER - 1:
                 raise ValueError(f"Could not converge in {MAXITER} "
                                  "iterations.")
+        self.dQ = dQ
+        self.tensions = tensions
 
-        # End-to-end vector moments
-        elemA = np.outer(self.REE, self.REE)
+    def measure(self):
+        """Measure quantities from the systems.
+
+        Returns
+        -------
+        observables : dict
+            Dictionary of observables quantities.
+        """
+        if self.tensions is None:
+            raise RuntimeError("Attempt to measure tension but tension not "
+                               "solved.")
+        # Molecurlar conformation tensor
+        A = np.outer(self.REE, self.REE)
+        # Molecular stress
         # Row-wise tensor dot:
-        moments = tensions[:, None, None]*(self.Q[:, :, None]
-                                           * self.Q[:, None, :])
-        elemS = np.sum(moments, axis=0)
-        self.Q = new_Q
-        self._tensions = tensions
-        return elemA, elemS
+        moments = self.tensions[:, None, None]*(self.Q[:, :, None]
+                                                * self.Q[:, None, :])
+        S = np.sum(moments, axis=0)
+        observables = {'A': A, 'S': S}
+        return observables
+
+    def evolve(self, gradU, dt):
+        """Evolve chain by a time step dt. Itô calculus convention.
+        Reset random forces.
+
+        Parameters
+        ----------
+        gradU : (3, 3) ndarray
+            Velocity gradient, dvj/dxi convention.
+        dt : float
+            Time step.
+        """
+        self.Q += self.dQ
+        # draw new random forces
+        self.tensions = None
+        # Uncorrelated forces on beads...
+        Prior = self.rng.standard_normal((len(self.Q)+1, 3))
+
+        if FILTER_NOISE:
+            # -- Noise reduction:
+            # For inner beads, keep component that is only normal to both links
+            vN = np.cross(self.Q[1:], self.Q[:-1])
+            vN2 = np.sum(vN**2, axis=1)
+            Prior[1:-1] = (np.sum(Prior[1:-1]*vN, axis=1)[:, None]*vN
+                           / vN2[:, None])
+            # For start and end, just normal to the link
+            Prior[0] = Prior[0] - (np.sum(Prior[0]*self.Q[0]) * self.Q[0])
+            Prior[-1] = Prior[-1] - (np.sum(Prior[-1]*self.Q[-1]) * self.Q[-1])
+
+        # ...gives correlated Brownian force on rods:
+        self.dW = Prior[1:] - Prior[:-1]
 
     def save_vtk(self, file_name):
         """Save the molecule in vtk 3d format. File can then be imported in
@@ -190,15 +241,15 @@ class KramersChain:
         lines += [str(i) for i in range(len(self)+1)]
         out.append(" ".join(lines))
         out.append("")
-        if self._tensions is not None:
+        if self.tensions is not None:
             # Tensions
             out.append(f"POINT_DATA {len(self)+1}")
             out.append("SCALARS tension double")
             out.append("LOOKUP_TABLE default")
-            out.append(f"{self._tensions[0]}")
+            out.append(f"{self.tensions[0]}")
             for i in range(len(self)-1):
-                out.append(f"{(self._tensions[i] + self._tensions[i+1])/2}")
-            out.append(f"{self._tensions[-1]}")
+                out.append(f"{(self.tensions[i] + self.tensions[i+1])/2}")
+            out.append(f"{self.tensions[-1]}")
         content = '\n'.join(out)
         with open(file_name, 'w') as f:
             f.write(content)
