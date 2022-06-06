@@ -11,6 +11,21 @@ molecule models are already implemented.
 
 Beta version.
 
+Installation
+------------
+
+In the target directory, clone this repository:
+
+    git clone https://github.com/dynamicslab/pysindy.git
+
+Then run the install script:
+
+.. code-block:: bash
+    pip install .
+
+
+
+
 Related packages
 ----------------
 
