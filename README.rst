@@ -21,6 +21,7 @@ In the target directory, clone this repository:
 Then run the install script:
 
 .. code-block:: bash
+
     pip install .
 
 
