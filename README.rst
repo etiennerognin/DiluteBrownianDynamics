@@ -37,9 +37,11 @@ A straightforward approach is to copy and modify an existing model in the
 in addition to constructors should provide at least three methods:
 
 1. ``solve``: solve tensions and other forces given flow field and constraints.
+
 2. ``measure``: compute and return in a Python dictionary what needs to be
     recorded at each time step (for example the moment of forces for the stress
     tensor estimator).
+    
 3. ``evolve``: evolve the system to the next step given the forces and flow field,
     and draw new random forces.
 
