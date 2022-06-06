@@ -39,11 +39,11 @@ in addition to constructors should provide at least three methods:
 ``solve``: solve tensions and other forces given flow field and constraints.
 
 ``measure``: compute and return in a Python dictionary what needs to be
-    recorded at each time step (for example the moment of forces for the stress
-    tensor estimator).
+  recorded at each time step (for example the moment of forces for the stress
+  tensor estimator).
     
 ``evolve``: evolve the system to the next step given the forces and flow field,
-    and draw new random forces.
+  and draw new random forces.
 
 The main simulation loop will concatenate each measured observable into a
 dictionary of time series. Then if an ensemble of molecules is simulated, average and
