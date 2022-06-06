@@ -10,3 +10,10 @@ structure (there is no *simulation box*) and parallel support. A variety of
 molecule models are already implemented.
 
 Beta version.
+
+Related packages
+----------------
+
+- **BDpack** <http://amir-saadat.github.io/BDpack> Brownain dynamics in Fortran.
+- **QPolymer** <https://sourceforge.net/projects/qpolymer/> Qt-based GUI for
+polymer dynamics.
