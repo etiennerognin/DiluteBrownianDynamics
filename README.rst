@@ -50,9 +50,11 @@ compute and record.
 Related packages
 ----------------
 
-- BDpack_ Brownain dynamics in Fortran.
-- QPolymer_ Qt-based GUI for
-  polymer dynamics.
+BDpack_
+  Brownain dynamics in Fortran.
+
+QPolymer_
+  Qt-based GUI for polymer dynamics.
 
 .. _BDpack: http://amir-saadat.github.io/BDpack
 .. _QPolymer: https://sourceforge.net/projects/qpolymer
