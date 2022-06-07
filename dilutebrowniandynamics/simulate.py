@@ -55,7 +55,7 @@ def simulate_batch(molecules, gradU, n_rec, dt, n_proc=4):
 
 
 def simulate(molecule, gradU, n_rec, dt, full_trajectory):
-    """Compute trajectory (in the modelcular dynamics sense) of a dumbbell.
+    """Simulate a molecule and collect data.
 
     Parameters
     ----------
@@ -78,9 +78,6 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory):
     molecule_out: Molecule object
         Molecule after the last time step, or full list at each time step.
     """
-
-    # For parallel compatibility:
-    np.random.seed()
 
     # Data output
     observables = []

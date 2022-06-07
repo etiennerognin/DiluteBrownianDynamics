@@ -37,14 +37,16 @@ The usual pipeline of molecular dynamics simulation applies:
 
 1. Create a new molecule;
 
-2. Perform relaxation step (no flow);
+2. Perform relaxation step (no flow), discard data;
 
 3. Perform simulation of interest (for example with an external flow field);
 
 4. Export and analyse data. Some models can also be exported in ``vtk`` format
-   which third party software such as Paraview can display and animate.
+   which third party software such as Paraview_ can display and animate.
 
-These step can be applied in batches in parallel to an ensemble of molecules.
+.. _Paraview: https://www.paraview.org/
+
+These steps can be run in parallel for an ensemble of molecules.
 
 Examples
 ^^^^^^^^
