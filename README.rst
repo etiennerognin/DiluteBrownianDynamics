@@ -16,15 +16,11 @@ Installation
 
 In the target directory, clone this repository:
 
-.. code-block:: bash
-
-  git clone https://github.com/etiennerognin/DiluteBrownianDynamics.git
+    git clone https://github.com/etiennerognin/DiluteBrownianDynamics.git
 
 Then run the install script:
 
-.. code-block:: bash
-
-  pip install .
+    pip install .
 
 Examples
 --------
@@ -54,6 +50,6 @@ compute and record.
 Related packages
 ----------------
 
-- **BDpack** <http://amir-saadat.github.io/BDpack> Brownain dynamics in Fortran.
-- **QPolymer** <https://sourceforge.net/projects/qpolymer/> Qt-based GUI for
+- `BDpack<http://amir-saadat.github.io/BDpack>`_ Brownain dynamics in Fortran.
+- `QPolymer<https://sourceforge.net/projects/qpolymer/>`_ Qt-based GUI for
   polymer dynamics.
