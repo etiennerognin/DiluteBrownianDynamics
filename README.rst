@@ -14,11 +14,11 @@ Beta version.
 Installation
 ------------
 
-In the target directory, clone this repository:
+In the target directory, clone this repository::
 
   git clone https://github.com/etiennerognin/DiluteBrownianDynamics.git
 
-Then run the install script:
+Then run the install script::
 
   pip install .
 
