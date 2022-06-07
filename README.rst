@@ -16,11 +16,11 @@ Installation
 
 In the target directory, clone this repository:
 
-    git clone https://github.com/etiennerognin/DiluteBrownianDynamics.git
+  git clone https://github.com/etiennerognin/DiluteBrownianDynamics.git
 
 Then run the install script:
 
-    pip install .
+  pip install .
 
 Examples
 --------
