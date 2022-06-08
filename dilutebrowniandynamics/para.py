@@ -13,6 +13,28 @@ import numpy as np
 #     results = list(p.imap(partial(foo, arg2=1, arg3=2), args_list))
 # print(*results)
 
-a=(3,3)
-b=(1,)+a
-print(b)
+# a = [1.]*9
+# MAX_LEVEL = 3
+#
+# def merge(middle, begin=None, end=None, recursion_level=0):
+#     if begin is None:
+#         begin = []
+#     if end is None:
+#         end = []
+#
+#     if not middle:
+#         return begin + end
+#     if len(middle) == 1 or recursion_level == MAX_LEVEL:
+#         return begin + middle + end
+#     if len(middle) % 2 == 1:
+#         begin.append(middle.pop())
+#     # Smooth transition:
+#     begin.append(middle.pop())
+#     end = [middle.pop(-1)] + end
+#     merged = []
+#     for i in range(0, len(middle), 2):
+#         merged.append(middle[i]+middle[i+1])
+#     return merge(merged, begin, end, recursion_level+1)
+
+
+print(2. == 2)

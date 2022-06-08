@@ -54,7 +54,7 @@ def simulate_batch(molecules, gradU, n_rec, dt, n_proc=4):
     return observables, molecules_out
 
 
-def simulate(molecule, gradU, n_rec, dt, full_trajectory):
+def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
     """Simulate a molecule and collect data.
 
     Parameters
@@ -70,6 +70,8 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory):
         Dimensionless time step.
     full_trajectory : bool
         If True returns trajectory as a list of Molecule at each time step.
+    progress : bool, default False
+        If True, display tqdm progress bar
 
     Returns
     -------
@@ -90,8 +92,14 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory):
     level = 0
     dt_local = dt
 
-    for i in range(n_rec):
+    if progress:
+        iterations = tqdm.tqdm(range(n_rec))
+    else:
+        iterations = range(n_rec)
+
+    for i in iterations:
         subit = 0.    # Part of the time step job done
+        first_subit = True  # Flag to indicate first sub-iteration
         subobs = []   # Collection of observables which will be averaged
         weights = []
         while subit < dt:
@@ -108,7 +116,8 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory):
                 if full_trajectory and subit == 0.:
                     trajectory.append(copy.deepcopy(molecule))
                 # Evolve the model by one time step.
-                molecule.evolve(gradUt, dt_local)
+                molecule.evolve(first_subit=first_subit)
+                first_subit = False
 
                 # If this is a success, it means we can increment time:
                 subit += dt_local

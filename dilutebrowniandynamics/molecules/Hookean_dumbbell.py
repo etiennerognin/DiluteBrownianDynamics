@@ -63,7 +63,7 @@ class HookeanDumbbell:
         observables = {'A': A, 'S': S}
         return observables
 
-    def evolve(self, gradU, dt):
+    def evolve(self, **kwargs):
         """Evolve dumbbell by a time step dt. Itô calculus convention.
 
         Parameters
