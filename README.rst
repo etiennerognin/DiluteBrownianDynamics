@@ -82,7 +82,7 @@ Note on performance
 We can argue that having each molecule as a class instance is quite inefficient
 for very simple models such as dumbbells. However, one of the main goals of this
 package is to be easy to customise. Therefore this design seems to be a good
-compromise. As models grow more complex, the overhead associated object
+compromise. As models grow more complex, the overhead associated with object
 instantiations and method calls should be negligible.
 
 
