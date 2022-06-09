@@ -16,6 +16,8 @@ random dissipative forces.
 structure (there is no *simulation box*) and parallel support. A variety of
 molecule models are already implemented.
 
+.. image:: docs/chain.png
+
 
 Installation
 ------------

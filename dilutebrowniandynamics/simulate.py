@@ -71,12 +71,12 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
     full_trajectory : bool
         If True returns trajectory as a list of Molecule at each time step.
     progress : bool, default False
-        If True, display tqdm progress bar
+        If True, display tqdm progress bar.
 
     Returns
     -------
     observables : dict
-        Dictionary of measured quantities (depends on model)
+        Dictionary of measured quantities (depends on model).
     molecule_out: Molecule object
         Molecule after the last time step, or full list at each time step.
     """
@@ -105,7 +105,10 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
         while subit < dt:
 
             # Evaluate velocity gradient
-            gradUt = gradU(i*dt+subit) if callable(gradU) else gradU
+            if callable(gradU):
+                gradUt = gradU(i*dt+subit)
+            else:
+                gradUt = gradU
 
             try:
                 # Solve internal tensions with constraints.
@@ -113,7 +116,7 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
                 # Measure whatever the model is set to output.
                 subobs.append(molecule.measure())
                 weights.append(0.5**level)
-                if full_trajectory and subit == 0.:
+                if full_trajectory and first_subit:
                     trajectory.append(copy.deepcopy(molecule))
                 # Evolve the model by one time step.
                 molecule.evolve(first_subit=first_subit)

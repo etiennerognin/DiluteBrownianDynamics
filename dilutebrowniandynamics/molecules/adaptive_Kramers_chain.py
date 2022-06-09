@@ -5,7 +5,7 @@ from scipy.linalg.lapack import dptsv
 LENGTH_TOL = 1e-6
 MAXITER = 100
 FILTER_NOISE = True
-MERGE_MAX_LEVEL = 6    # Maximum level of recursion for merging rods
+MERGE_MAX_LEVEL = 0    # Maximum level of recursion for merging rods
 MERGE_THRESHOLD = 1000.  # Dimensionless tension required to merge segments
 FLAG = False
 

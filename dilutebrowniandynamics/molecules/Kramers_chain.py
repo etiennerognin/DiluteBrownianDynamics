@@ -3,7 +3,7 @@ from scipy.linalg.lapack import dptsv
 
 
 LENGTH_TOL = 1e-6
-MAXITER = 1000
+MAXITER = 100
 FILTER_NOISE = True
 
 
@@ -31,28 +31,37 @@ class KramersChain:
         self.Q = Q
         self.tensions = None
         self.rng = np.random.default_rng()
-
-        # Uncorrelated forces on beads...
-        Prior = self.rng.standard_normal((len(Q)+1, 3))
-
-        if FILTER_NOISE:
-            # -- Noise reduction:
-            # For inner beads, keep component that is only normal to both links
-            vN = np.cross(self.Q[1:], self.Q[:-1])
-            vN2 = np.sum(vN**2, axis=1)
-            Prior[1:-1] = (np.sum(Prior[1:-1]*vN, axis=1)[:, None]*vN
-                           / vN2[:, None])
-            # For start and end, just normal to the link
-            Prior[0] = Prior[0] - (np.sum(Prior[0]*self.Q[0]) * self.Q[0])
-            Prior[-1] = Prior[-1] - (np.sum(Prior[-1]*self.Q[-1]) * self.Q[-1])
-
-        # ...gives correlated Brownian force on rods:
-        self.dW = Prior[1:] - Prior[:-1]
+        self.dW = self.stochastic_force()
         self.dQ = None
 
     def __len__(self):
         """Number of links in the chain"""
         return len(self.Q)
+
+    def stochastic_force(self):
+        """Draw random force. Noise filtering if applicable. Noise variance
+        proportional to bead size."""
+
+        # Uncorrelated forces on beads...
+        Prior = self.rng.standard_normal((len(self)+1, 3))
+
+        if FILTER_NOISE:
+            # -- Noise reduction:
+            # For inner beads, keep component that is only normal to both links
+            # Note that vector products of aligned beads can be close to zero,
+            # therefore removing scalar products is preferred.
+            Prior[1:-1] = (Prior[1:-1]
+                           - (np.sum(Prior[1:-1]*self.Q[1:], axis=1)[:, None]
+                              * self.Q[1:])
+                           - (np.sum(Prior[1:-1]*self.Q[:-1], axis=1)[:, None]
+                              * self.Q[:-1])
+                           )
+            # For start and end, just normal to the link
+            Prior[0] = Prior[0] - np.sum(Prior[0]*self.Q[0])*self.Q[0]
+            Prior[-1] = Prior[-1] - np.sum(Prior[-1]*self.Q[-1])*self.Q[-1]
+
+        # ...gives correlated Brownian force on rods:
+        return Prior[1:] - Prior[:-1]
 
     @classmethod
     def from_normal_distribution(cls, n_links):
@@ -183,7 +192,7 @@ class KramersChain:
         observables = {'A': A, 'S': S}
         return observables
 
-    def evolve(self, gradU, dt):
+    def evolve(self, **kwargs):
         """Evolve chain by a time step dt. Itô calculus convention.
         Reset random forces.
 
@@ -197,22 +206,7 @@ class KramersChain:
         self.Q += self.dQ
         # draw new random forces
         self.tensions = None
-        # Uncorrelated forces on beads...
-        Prior = self.rng.standard_normal((len(self.Q)+1, 3))
-
-        if FILTER_NOISE:
-            # -- Noise reduction:
-            # For inner beads, keep component that is only normal to both links
-            vN = np.cross(self.Q[1:], self.Q[:-1])
-            vN2 = np.sum(vN**2, axis=1)
-            Prior[1:-1] = (np.sum(Prior[1:-1]*vN, axis=1)[:, None]*vN
-                           / vN2[:, None])
-            # For start and end, just normal to the link
-            Prior[0] = Prior[0] - (np.sum(Prior[0]*self.Q[0]) * self.Q[0])
-            Prior[-1] = Prior[-1] - (np.sum(Prior[-1]*self.Q[-1]) * self.Q[-1])
-
-        # ...gives correlated Brownian force on rods:
-        self.dW = Prior[1:] - Prior[:-1]
+        self.dW = self.stochastic_force()
 
     def save_vtk(self, file_name):
         """Save the molecule in vtk 3d format. File can then be imported in
