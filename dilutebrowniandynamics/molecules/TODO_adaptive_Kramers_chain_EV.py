@@ -10,12 +10,9 @@ MERGE_THRESHOLD = 1000.  # Dimensionless tension required to merge segments
 FLAG = False
 
 
-class AdaptiveKramersChain:
-    """A Kramers chain, also known as bead-rod model, is a chain of N rigid
-    vectors linking N+1 Brownian beads. The tension in each link is given by
-    the rigidity constraint. This adaptive version will merge aligned segments
-    provided that internal tension is greated than a threshold. This can be
-    thought of further coarse graining of the polymer.
+class AdaptiveKramersChainEVHI:
+    """Adaptive Kramers chain with excluded volume and hydrodynamic
+    interactions.
 
     Attributes
     ----------
