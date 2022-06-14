@@ -36,5 +36,6 @@ import numpy as np
 #         merged.append(middle[i]+middle[i+1])
 #     return merge(merged, begin, end, recursion_level+1)
 
-
-print(2. == 2)
+a = np.arange(3)
+b = np.arange(3)
+print(a@np.eye(4)@b)

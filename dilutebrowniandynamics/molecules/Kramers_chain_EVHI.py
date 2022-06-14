@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.linalg.lapack import dptsv
+from scipy.linalg.lapack import dposv, dptsv
 
 
 LENGTH_TOL = 1e-6
@@ -24,14 +24,20 @@ class KramersChainEVHI:
         Evolution vector.
     _EV : ndarray (N, 3)
         Excluded volume interactions. Cached property.
+    _HI : ndarray (N, 3)
+        Explicit hydrodynamic interactions. Cached property.
+    _M : ndarray(N+1, N+1, 3, 3)
+        Mobility matrices of the beads
     """
-    def __init__(self, Q):
+    def __init__(self, Q, h_star):
         self.Q = Q
         self.tensions = None
         self.rng = np.random.default_rng()
         self.dW = self.stochastic_force()
         self.dQ = None
         self._EV = None
+        self.h_star = h_star
+        self._M = None
 
     def __len__(self):
         """Number of links in the chain"""
@@ -63,7 +69,7 @@ class KramersChainEVHI:
         return Prior[1:] - Prior[:-1]
 
     @classmethod
-    def from_normal_distribution(cls, n_links):
+    def from_normal_distribution(cls, n_links, h_star):
         """Initialise a Kramers chain as a collection of vectors drawn from a
         normal distribution and rescaled to a unit vector.
         Parameters
@@ -79,7 +85,7 @@ class KramersChainEVHI:
         Q = np.random.standard_normal((n_links, 3))
         norms = np.sqrt(np.sum(Q**2, axis=1))
         Q = Q/norms[:, None]
-        return cls(Q)
+        return cls(Q, h_star)
 
     @property
     def coordinates(self):
@@ -100,17 +106,219 @@ class KramersChainEVHI:
         """Computes excluded volume interactions. Cached property."""
         if self._EV is None:
             X = self.coordinates
-            self._EV = np.empty_like(self.Q)
-            # Loop over pairs of beads:
+            # Interactions between beads
+            self._EV = np.zeros_like(X)
+            # # Loop over pairs of beads:
             for i in range(len(self)+1):
                 for j in range(i+1, len(self)+1):
-                    r = np.sqrt(np.sum((X[i]-X[j])**2))
-                    self._EV[i] = 0.
-                    self._EV[j] = 0.
+                    R = X[i]-X[j]
+                    drift = fromGaussianPotential(R, height=1., sigma=0.5)
+                    self._EV[i] += drift
+                    self._EV[j] -= drift
         return self._EV
+
+    @property
+    def M(self):
+        """Compute mobility matrices. Cached property."""
+        if self._M is None:
+            X = self.coordinates
+            N = len(X)
+            self._M = np.empty((N+1, N+1, 3, 3))
+            for i in range(len(self)+1):
+                self._M[i, i] = np.eye(3)
+                for j in range(i+1, len(self)+1):
+                    R = X[i]-X[j]
+                    S = RotnePragerYamakawa(R, h_star=self.h_star)
+                    self._M[i, j] = S
+                    self._M[j, i] = S
+        return self._M
 
     def solve(self, gradU, dt):
         """Solve tension according to current random forces and constraints.
+
+        Parameters
+        ----------
+        gradU : (3, 3) ndarray
+            Velocity gradient, dvj/dxi convention.
+        dt : float
+            Time step.
+        """
+        if self.h_star == 0.:
+            self.solve_free_draining(gradU, dt)
+            return
+
+        # Right hand side
+        dW = np.sqrt(2*dt)*self.dW
+        Q_gradU = self.Q @ gradU
+        Q_gradU_Q = np.sum(Q_gradU*self.Q, axis=1)
+        dW_dot_Q = np.sum(dW*self.Q, axis=1)
+        rodEV = self.EV[1:]-self.EV[:-1]
+        EV_dot_Q = np.sum(rodEV*self.Q, axis=1)
+        RHS0 = Q_gradU_Q + EV_dot_Q + dW_dot_Q/dt
+
+        # Dense matrix
+        # Note: `M_Q` is not symmetric while `a` is.
+        N = len(self)
+        a = np.empty((N, N))
+        M_Q = np.empty((N, N, 3))
+        for i in range(N):
+            for j in range(N):
+                M_Q[i, j] = (self.M[i, j]
+                             + self.M[i+1, j+1]
+                             - self.M[i+1, j]
+                             - self.M[i, j+1]
+                             ) @ self.Q[j]
+                a[i, j] = M_Q[i, j] @ self.Q[i]
+
+        RHS = RHS0.copy()
+
+        dQ = np.empty_like(self.Q)
+
+        for i in range(MAXITER):
+            with np.errstate(over='raise', invalid='raise'):
+                try:
+                    # Solve the system, see NOTES
+                    tensions = dposv(a, RHS)[1]
+
+                    for k in range(N):
+                        dQ[k] = dt*(Q_gradU[k]
+                                    - np.sum(tensions[:, None]*M_Q[k], axis=0)
+                                    ) + dW[k]
+
+                    # Compute new chain
+                    new_Q = self.Q + dQ
+
+                    # Compute rod square lengths
+                    L = np.sum(new_Q**2, axis=1)
+                    err = np.max(np.abs(L-1))
+                    # update the right-hand-side
+                    RHS = RHS0 + 0.5/dt*np.sum(dQ**2, axis=1)
+                except FloatingPointError:
+                    raise ValueError('dptsv convergence failed.')
+            if err < LENGTH_TOL:
+                # Re normalise and exit loop
+                new_Q = new_Q/np.sqrt(L[:, None])
+                dQ = new_Q - self.Q
+                break
+            elif i == MAXITER - 1:
+                raise ValueError(f"Could not converge in {MAXITER} "
+                                 "iterations.")
+
+        self.dQ = dQ
+        self.tensions = tensions
+
+    def measure(self):
+        """Measure quantities from the systems.
+
+        Returns
+        -------
+        observables : dict
+            Dictionary of observables quantities.
+        """
+        if self.tensions is None:
+            raise RuntimeError("Attempt to measure tension but tension not "
+                               "solved.")
+        # Molecurlar conformation tensor
+        A = np.outer(self.REE, self.REE)
+        # Molecular stress
+        # Row-wise tensor dot:
+        moments = self.tensions[:, None, None]*(self.Q[:, :, None]
+                                                * self.Q[:, None, :])
+        S = np.sum(moments, axis=0)
+        observables = {'A': A, 'S': S}
+        return observables
+
+    def evolve(self, **kwargs):
+        """Evolve chain by a time step dt. Itô calculus convention.
+        Reset random forces.
+
+        Parameters
+        ----------
+        gradU : (3, 3) ndarray
+            Velocity gradient, dvj/dxi convention.
+        dt : float
+            Time step.
+        """
+        self.Q += self.dQ
+
+        self.tensions = None
+        self.dW = self.stochastic_force()
+        self._M = None
+        if kwargs['first_subit']:
+            self._EV = None
+
+    def save_vtk(self, file_name):
+        """Save the molecule in vtk 3d format. File can then be imported in
+        Paraview.
+
+        Parameters
+        ----------
+        file_name : str
+            Name of file.
+        """
+        out = []
+        # Header
+        out.append("# vtk DataFile Version 4.0")
+        out.append("Polymer chain")
+        out.append("ASCII")
+        out.append("DATASET POLYDATA")
+        out.append("")
+
+        # Points
+        out.append(f"POINTS {len(self)+1} double")
+        for x, y, z in self.coordinates:
+            out.append(f"{x:e}\t{y:e}\t{z:e}")
+        out.append("")
+
+        # Lines
+        out.append(f"LINES 1 {len(self)+2}")
+        lines = [str(len(self)+1)]
+        lines += [str(i) for i in range(len(self)+1)]
+        out.append(" ".join(lines))
+        out.append("")
+
+        # Bead size (we need this to initialise FIELD on points)
+        out.append(f"POINT_DATA {len(self)+1}")
+        out.append("SCALARS bead_size double")
+        out.append("LOOKUP_TABLE default")
+        out.append(" ".join(["1.0"]*(len(self)+1)))
+        out.append("")
+
+        # Get number of fields
+        if self.tensions is None:
+            n_fields = 1
+        else:
+            n_fields = 2
+        out.append(f"FIELD observables {n_fields}")
+
+        if self.tensions is not None:
+            # Tensions
+            out.append(f"tension 1 {len(self)+1} float")
+            out.append(f"{self.tensions[0]}")
+            for i in range(len(self)-1):
+                out.append(f"{(self.tensions[i] + self.tensions[i+1])/2}")
+            out.append(f"{self.tensions[-1]}")
+            out.append("")
+
+        # Exculed volume
+        out.append(f"excluded_volume 3 {len(self)+1} float")
+        for ev in self.EV:
+            out.append(f"{ev[0]} {ev[1]} {ev[2]}")
+        out.append("")
+
+        # HI
+        # out.append(f"hydrodynamic 3 {len(self)+1} float")
+        # for hi in self.HI:
+        #     out.append(f"{hi[0]} {hi[1]} {hi[2]}")
+        # out.append("")
+
+        # Make it a file
+        content = '\n'.join(out)
+        with open(file_name, 'w') as f:
+            f.write(content)
+
+    def solve_free_draining(self, gradU, dt):
+        """Solve tension without hydrodynamic interaction.
 
         Parameters
         ----------
@@ -131,7 +339,9 @@ class KramersChainEVHI:
         Q_gradU = self.Q @ gradU
         Q_gradU_Q = np.sum(Q_gradU*self.Q, axis=1)
         dW_dot_Q = np.sum(dW*self.Q, axis=1)
-        RHS0 = Q_gradU_Q + dW_dot_Q/dt
+        rodEV = self.EV[1:]-self.EV[:-1]
+        EV_dot_Q = np.sum(rodEV*self.Q, axis=1)
+        RHS0 = Q_gradU_Q + EV_dot_Q + dW_dot_Q/dt
 
         # Tridiagonal matrix
         # Low diagonal elements & upper diagonal elements
@@ -184,79 +394,74 @@ class KramersChainEVHI:
         self.dQ = dQ
         self.tensions = tensions
 
-    def measure(self):
-        """Measure quantities from the systems.
 
-        Returns
-        -------
-        observables : dict
-            Dictionary of observables quantities.
-        """
-        if self.tensions is None:
-            raise RuntimeError("Attempt to measure tension but tension not "
-                               "solved.")
-        # Molecurlar conformation tensor
-        A = np.outer(self.REE, self.REE)
-        # Molecular stress
-        # Row-wise tensor dot:
-        moments = self.tensions[:, None, None]*(self.Q[:, :, None]
-                                                * self.Q[:, None, :])
-        S = np.sum(moments, axis=0)
-        observables = {'A': A, 'S': S}
-        return observables
+def LennardJones(R, depth=1., radius=1.):
+    """Drift due to a Lennard Jones potential.
 
-    def evolve(self, **kwargs):
-        """Evolve chain by a time step dt. Itô calculus convention.
-        Reset random forces.
+    Parameters
+    ----------
+    R : ndarray (3,)
+        Distance between beads.
+    depth : float, default 1.
+        Dimensionless depth of the potential.
+    radius : float, default 1.
+        Dimensionless radius of the potential (distance of zero energy).
 
-        Parameters
-        ----------
-        gradU : (3, 3) ndarray
-            Velocity gradient, dvj/dxi convention.
-        dt : float
-            Time step.
-        """
-        self.Q += self.dQ
-        # draw new random forces
-        self.tensions = None
-        self.dW = self.stochastic_force()
+    Returns
+    -------
+    ndarray (3.)
+        Dimensionless drift"""
+    R2 = np.sum(R**2)
+    if R2 > radius**2 and R2 < 4.:
+        return 24*depth*(2*radius**12/R2**7 - radius**6/R2**4)*R
+    elif R2 < radius**2:
+        return 24*depth/radius*R/np.sqrt(R2)
+    else:
+        return np.zeros(3)
 
-    def save_vtk(self, file_name):
-        """Save the molecule in vtk 3d format. File can then be imported in
-        Paraview.
 
-        Parameters
-        ----------
-        file_name : str
-            Name of file.
-        """
-        out = []
-        # Header
-        out.append("# vtk DataFile Version 4.0")
-        out.append("Polymer chain")
-        out.append("ASCII")
-        out.append("DATASET POLYDATA")
-        out.append("")
-        # Points
-        out.append(f"POINTS {len(self)+1} double")
-        for x, y, z in self.coordinates:
-            out.append(f"{x:e}\t{y:e}\t{z:e}")
-        out.append("")
-        # Lines
-        out.append(f"LINES 1 {len(self)+2}")
-        lines = [str(len(self)+1)]
-        lines += [str(i) for i in range(len(self)+1)]
-        out.append(" ".join(lines))
-        out.append("")
-        if self.tensions is not None:
-            # Tensions
-            out.append(f"POINT_DATA {len(self)+1}")
-            out.append("SCALARS tension double")
-            out.append("LOOKUP_TABLE default")
-            out.append(f"{self.tensions[0]}")
-            for i in range(len(self)-1):
-                out.append(f"{(self.tensions[i] + self.tensions[i+1])/2}")
-            out.append(f"{self.tensions[-1]}")
-        content = '\n'.join(out)
-        with open(file_name, 'w') as f:
-            f.write(content)
+def fromGaussianPotential(R, height=1., sigma=1.):
+    """Drift due to a Gaussian potential.
+
+    Parameters
+    ----------
+    R : ndarray (3,)
+        Distance between beads.
+    height : float, default 1.
+        Dimensionless height of the potential. Positive for repulsive force.
+    sigma : float, default 1.
+        Dimensionless standard deviation of the potential.
+
+    Returns
+    -------
+    ndarray (3,)
+        Dimensionless drift"""
+    R2 = np.sum(R**2)
+    return height/sigma**2*np.exp(-0.5*R2/sigma**2)*R
+
+
+def RotnePragerYamakawa(R, h_star=0.5641895835477563):
+    """Compute Rotne-Prager-Yamakawa mobility tensor.
+
+    Parameters
+    ----------
+    R : ndarray (3,)
+        Distance between beads.
+    h_star : float, default 1/np.sqrt(np.pi)
+        Strength of hydrodynamic interactions
+
+    Returns
+    -------
+    ndarray (3, 3)
+        Mobility tensor"""
+    a = 1.7724538509055159*h_star
+    R2 = np.sum(R**2)
+    normR = np.sqrt(R2)
+    if normR < 1e-6:
+        return np.eye(3)
+    elif normR < 2*a:
+        return ((1-9*normR/(32*a))*np.eye(3)
+                + 3./(32*a*normR)*np.outer(R, R))
+    else:
+        return (0.75*a/normR*(np.eye(3)-np.outer(R, R)/R2)
+                + 2*a**2/(3*R2)*(np.eye(3)-3*np.outer(R, R)/R2))

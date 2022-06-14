@@ -27,7 +27,7 @@ In the target directory, clone this repository::
 
 Then run the install script::
 
-  pip install .
+  pip install -U .
 
 
 Usage
