@@ -152,15 +152,13 @@ class KramersChainEVHI:
         Q_gradU = self.Q @ gradU
         Q_gradU_Q = np.sum(Q_gradU*self.Q, axis=1)
         dW_dot_Q = np.sum(dW*self.Q, axis=1)
-        rodEV = self.EV[1:]-self.EV[:-1]
-        EV_dot_Q = np.sum(rodEV*self.Q, axis=1)
-        RHS0 = Q_gradU_Q + EV_dot_Q + dW_dot_Q/dt
 
         # Dense matrix
         # Note: `M_Q` is not symmetric while `a` is.
         N = len(self)
         a = np.empty((N, N))
         M_Q = np.empty((N, N, 3))
+        rodEV = np.zeros((N, 3))
         for i in range(N):
             for j in range(N):
                 M_Q[i, j] = (self.M[i, j]
@@ -169,7 +167,9 @@ class KramersChainEVHI:
                              - self.M[i, j+1]
                              ) @ self.Q[j]
                 a[i, j] = M_Q[i, j] @ self.Q[i]
-
+                rodEV[i] += (self.M[i+1, j] - self.M[i, j]) @ self.EV[j]
+        EV_dot_Q = np.sum(rodEV*self.Q, axis=1)
+        RHS0 = Q_gradU_Q + EV_dot_Q + dW_dot_Q/dt
         RHS = RHS0.copy()
 
         dQ = np.empty_like(self.Q)
@@ -181,7 +181,7 @@ class KramersChainEVHI:
                     tensions = dposv(a, RHS)[1]
 
                     for k in range(N):
-                        dQ[k] = dt*(Q_gradU[k]
+                        dQ[k] = dt*(Q_gradU[k] + rodEV[k]
                                     - np.sum(tensions[:, None]*M_Q[k], axis=0)
                                     ) + dW[k]
 
@@ -359,17 +359,18 @@ class KramersChainEVHI:
                     # Solve the system, see NOTES
                     tensions = dptsv(d, dlu, RHS)[2]
 
-                    dQ[0] = dt*(Q_gradU[0] + tensions[1]*self.Q[1]
+                    dQ[0] = dt*(Q_gradU[0] + rodEV[0] + tensions[1]*self.Q[1]
                                 - 2*tensions[0]*self.Q[0]
                                 ) + dW[0]
 
-                    dQ[1:-1] = dt*(Q_gradU[1:-1]
+                    dQ[1:-1] = dt*(Q_gradU[1:-1] + rodEV[1:-1]
                                    + tensions[2:, None]*self.Q[2:]
                                    - 2*tensions[1:-1, None]*self.Q[1:-1]
                                    + tensions[:-2, None]*self.Q[:-2]
                                    ) + dW[1:-1]
 
-                    dQ[-1] = dt*(Q_gradU[-1] - 2*tensions[-1]*self.Q[-1]
+                    dQ[-1] = dt*(Q_gradU[-1] + rodEV[-1]
+                                 - 2*tensions[-1]*self.Q[-1]
                                  + tensions[-2]*self.Q[-2]
                                  ) + dW[-1]
 
