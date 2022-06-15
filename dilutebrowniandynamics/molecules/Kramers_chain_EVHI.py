@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.linalg.lapack import dposv, dptsv
+from numpy.linalg import LinAlgError
 
 
 LENGTH_TOL = 1e-6
@@ -31,12 +32,12 @@ class KramersChainEVHI:
     """
     def __init__(self, Q, h_star):
         self.Q = Q
+        self.h_star = h_star
         self.tensions = None
         self.rng = np.random.default_rng()
         self.dW = self.stochastic_force()
         self.dQ = None
         self._EV = None
-        self.h_star = h_star
         self._M = None
 
     def __len__(self):
@@ -49,6 +50,23 @@ class KramersChainEVHI:
 
         # Uncorrelated forces on beads...
         Prior = self.rng.standard_normal((len(self)+1, 3))
+
+        # Correlation due to HI
+        if self.h_star > 0:
+            N = len(self)
+            Gamma = self.M.transpose((0, 2, 1, 3)).reshape((3*(N+1), 3*(N+1)))
+            try:
+                B = np.linalg.cholesky(Gamma)
+            except LinAlgError:
+                vals = np.linalg.eigvalsh(Gamma)
+                print(np.min(vals), np.max(vals))
+                import matplotlib.pyplot as plt
+                plt.matshow(Gamma)
+                plt.show()
+                exit()
+                exit()
+            P2 = B @ Prior.reshape((3*(N+1),))
+            Prior = P2.reshape((N+1, 3))
 
         if FILTER_NOISE:
             # -- Noise reduction:
@@ -112,7 +130,7 @@ class KramersChainEVHI:
             for i in range(len(self)+1):
                 for j in range(i+1, len(self)+1):
                     R = X[i]-X[j]
-                    drift = fromGaussianPotential(R, height=1., sigma=0.5)
+                    drift = fromGaussianPotential(R, height=2., sigma=1.)
                     self._EV[i] += drift
                     self._EV[j] -= drift
         return self._EV
@@ -122,11 +140,11 @@ class KramersChainEVHI:
         """Compute mobility matrices. Cached property."""
         if self._M is None:
             X = self.coordinates
-            N = len(X)
+            N = len(self)
             self._M = np.empty((N+1, N+1, 3, 3))
-            for i in range(len(self)+1):
+            for i in range(N+1):
                 self._M[i, i] = np.eye(3)
-                for j in range(i+1, len(self)+1):
+                for j in range(i+1, N+1):
                     R = X[i]-X[j]
                     S = RotnePragerYamakawa(R, h_star=self.h_star)
                     self._M[i, j] = S
@@ -147,18 +165,28 @@ class KramersChainEVHI:
             self.solve_free_draining(gradU, dt)
             return
 
+        N = len(self)
+
         # Right hand side
         dW = np.sqrt(2*dt)*self.dW
         Q_gradU = self.Q @ gradU
         Q_gradU_Q = np.sum(Q_gradU*self.Q, axis=1)
         dW_dot_Q = np.sum(dW*self.Q, axis=1)
+        # Exculded volume
+        M2 = self.M[1:] - self.M[:-1]
+        rodEV = (M2.transpose((0, 2, 1, 3)).reshape((3*N, 3*(N+1)))
+                 @ self.EV.reshape((3*(N+1),)))
+        rodEV = rodEV.reshape((N, 3))
+        EV_dot_Q = np.sum(rodEV*self.Q, axis=1)
+        # Assemble right-hand-side
+        RHS0 = Q_gradU_Q + EV_dot_Q + dW_dot_Q/dt
+        RHS = RHS0.copy()
 
         # Dense matrix
         # Note: `M_Q` is not symmetric while `a` is.
-        N = len(self)
         a = np.empty((N, N))
         M_Q = np.empty((N, N, 3))
-        rodEV = np.zeros((N, 3))
+
         for i in range(N):
             for j in range(N):
                 M_Q[i, j] = (self.M[i, j]
@@ -167,10 +195,6 @@ class KramersChainEVHI:
                              - self.M[i, j+1]
                              ) @ self.Q[j]
                 a[i, j] = M_Q[i, j] @ self.Q[i]
-                rodEV[i] += (self.M[i+1, j] - self.M[i, j]) @ self.EV[j]
-        EV_dot_Q = np.sum(rodEV*self.Q, axis=1)
-        RHS0 = Q_gradU_Q + EV_dot_Q + dW_dot_Q/dt
-        RHS = RHS0.copy()
 
         dQ = np.empty_like(self.Q)
 
@@ -242,8 +266,9 @@ class KramersChainEVHI:
         self.Q += self.dQ
 
         self.tensions = None
-        self.dW = self.stochastic_force()
         self._M = None
+        # stochastic_force will trigger the calculation of updated self.M
+        self.dW = self.stochastic_force()
         if kwargs['first_subit']:
             self._EV = None
 
@@ -464,5 +489,5 @@ def RotnePragerYamakawa(R, h_star=0.5641895835477563):
         return ((1-9*normR/(32*a))*np.eye(3)
                 + 3./(32*a*normR)*np.outer(R, R))
     else:
-        return (0.75*a/normR*(np.eye(3)-np.outer(R, R)/R2)
-                + 2*a**2/(3*R2)*(np.eye(3)-3*np.outer(R, R)/R2))
+        return (0.75*a/normR*((1+2*a**2/(3*R2))*np.eye(3)
+                              + (1-2*a**2/R2)*np.outer(R, R)/R2))

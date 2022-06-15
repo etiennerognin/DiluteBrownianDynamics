@@ -1,41 +1,30 @@
-from multiprocessing import Pool
-from functools import partial
 import numpy as np
 
+a = np.zeros((2,3,3,3))
+a[0,0] = 0*np.eye(3)
+a[0,1] = 1*np.eye(3)
+a[0,1,0,2] = 1
+a[0,2] = 2*np.eye(3)
+a[0,2,0,2] = 2
+a[1,0] = 10*np.eye(3)
+a[1,1] = 11*np.eye(3)
+a[1,2] = 12*np.eye(3)
+a[1,2,0,2] = 22
+#print(a)
+b = a.transpose((0, 2, 1, 3)).reshape((6,9))
+print(b)
 
-# def foo(arg1, arg2, arg3):
-#     return arg1 + arg2, arg1 - arg2, arg3**arg3
-#
-#
-# args_list = [0, 1, 2, 3]
-#
-# with Pool(4) as p:
-#     results = list(p.imap(partial(foo, arg2=1, arg3=2), args_list))
-# print(*results)
+c = np.zeros((3,3,3,3))
+c[0, 0] = np.eye(3)
+c[1, 1] = 2*np.eye(3)
+c[2, 2] = 3*np.eye(3)
+c2 = c[1:] - c[:-1]
+print(c2.shape)
+print(c2)
+d = c2.transpose((0, 2, 1, 3)).reshape((6,9))
+print(d)
+e = np.outer(np.arange(3),np.ones(3))
 
-# a = [1.]*9
-# MAX_LEVEL = 3
-#
-# def merge(middle, begin=None, end=None, recursion_level=0):
-#     if begin is None:
-#         begin = []
-#     if end is None:
-#         end = []
-#
-#     if not middle:
-#         return begin + end
-#     if len(middle) == 1 or recursion_level == MAX_LEVEL:
-#         return begin + middle + end
-#     if len(middle) % 2 == 1:
-#         begin.append(middle.pop())
-#     # Smooth transition:
-#     begin.append(middle.pop())
-#     end = [middle.pop(-1)] + end
-#     merged = []
-#     for i in range(0, len(middle), 2):
-#         merged.append(middle[i]+middle[i+1])
-#     return merge(merged, begin, end, recursion_level+1)
-
-a = np.arange(3)
-b = np.arange(3)
-print(a@np.eye(4)@b)
+f = e.reshape((9,))
+print(f)
+print(d @ f)
