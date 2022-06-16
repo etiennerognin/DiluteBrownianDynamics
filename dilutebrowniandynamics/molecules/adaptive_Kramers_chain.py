@@ -1,10 +1,11 @@
 import numpy as np
 from scipy.linalg.lapack import dptsv
-
+from ..simulate import ConvergenceError
+from numba import jit
 
 LENGTH_TOL = 1e-6
 MAXITER = 100
-FILTER_NOISE = True
+FILTER_NOISE = False
 MERGE_MAX_LEVEL = 6    # Maximum level of recursion for merging rods
 MERGE_THRESHOLD = 1000.  # Dimensionless tension required to merge segments
 FLAG = False
@@ -38,14 +39,14 @@ class AdaptiveKramersChain:
     dQ : ndarray (N, 3)
         Evolution vector.
     """
-    def __init__(self, Q):
+    def __init__(self, Q, rng):
         self.Q = Q
         self._L2 = None
         self._beads = None
         self.tensions = None
         self.avg_tensions = None
         self.subit = 0.
-        self.rng = np.random.default_rng()
+        self.rng = rng
         self.dW = self.stochastic_force()
         self.dQ = None
 
@@ -62,17 +63,7 @@ class AdaptiveKramersChain:
             # For inner beads, keep component that is only normal to both links
             # Note that vector products of aligned beads can be close to zero,
             # therefore removing scalar products is preferred.
-            Prior[1:-1] = (Prior[1:-1]
-                           - (np.sum(Prior[1:-1]*self.Q[1:], axis=1)[:, None]
-                              * self.Q[1:]/self.L2[1:, None])
-                           - (np.sum(Prior[1:-1]*self.Q[:-1], axis=1)[:, None]
-                              * self.Q[:-1]/self.L2[:-1, None])
-                           )
-            # For start and end, just normal to the link
-            Prior[0] = Prior[0] - (np.sum(Prior[0]*self.Q[0])
-                                   * self.Q[0]/self.L2[0])
-            Prior[-1] = Prior[-1] - (np.sum(Prior[-1]*self.Q[-1])
-                                     * self.Q[-1]/self.L2[-1])
+            Prior = filter(self.Q, Prior, self.L2)
 
         # ...gives correlated Brownian force on rods:
         return Prior[1:] - Prior[:-1]
@@ -82,7 +73,7 @@ class AdaptiveKramersChain:
         return len(self.Q)
 
     @classmethod
-    def from_normal_distribution(cls, n_links):
+    def from_normal_distribution(cls, n_links, seed=np.random.SeedSequence()):
         """Initialise a Kramers chain as a collection of vectors drawn from a
         normal distribution and rescaled to a unit vector.
         Parameters
@@ -95,10 +86,11 @@ class AdaptiveKramersChain:
         KramersChain object
             Random Kramers chain.
         """
-        Q = np.random.standard_normal((n_links, 3))
+        rng = np.random.default_rng(seed)
+        Q = rng.standard_normal((n_links, 3))
         norms = np.sqrt(np.sum(Q**2, axis=1))
         Q = Q/norms[:, None]
-        return cls(Q)
+        return cls(Q, rng)
 
     @property
     def coordinates(self):
@@ -161,12 +153,13 @@ class AdaptiveKramersChain:
         # And corresponding inverse
         izeta = 1./zeta
 
+        # dQ without internal tensions
+        dQ0 = dt*(self.Q @ gradU) + np.sqrt(2*dt)*self.dW
+
         # Right hand side
-        dW = np.sqrt(2*dt)*self.dW
-        Q_gradU = self.Q @ gradU
-        Q_gradU_Q = np.sum(Q_gradU*self.Q, axis=1)
-        dW_dot_Q = np.sum(dW*self.Q, axis=1)
-        RHS0 = Q_gradU_Q + dW_dot_Q/dt
+        # ---------------
+        RHS0 = np.sum(dQ0*self.Q, axis=1)/dt
+        RHS = RHS0.copy()
 
         # Tridiagonal matrix
         # -- we will solve for tension/L
@@ -174,9 +167,6 @@ class AdaptiveKramersChain:
         dlu = - np.sum(self.Q[1:]*self.Q[:-1], axis=1)*izeta[1:-1]
         # Diagonal elements
         d = (izeta[1:]+izeta[:-1])*L2
-        # Right-hand side
-        RHS = RHS0.copy()
-        dQ = np.zeros_like(self.Q)
 
         for i in range(MAXITER):
             with np.errstate(over='raise', invalid='raise'):
@@ -184,23 +174,7 @@ class AdaptiveKramersChain:
                     # Solve the system, see NOTES
                     g_by_L = dptsv(d, dlu, RHS)[2]
 
-                    dQ[0] = dt*(Q_gradU[0] + izeta[1]*g_by_L[1]*self.Q[1]
-                                - (izeta[1] + izeta[0])*g_by_L[0]*self.Q[0]
-                                ) + dW[0]
-
-                    dQ[1:-1] = dt*(Q_gradU[1:-1]
-                                   + (izeta[2:-1, None]
-                                      * g_by_L[2:, None]*self.Q[2:])
-                                   - ((izeta[1:-2, None] + izeta[2:-1, None])
-                                      * g_by_L[1:-1, None]*self.Q[1:-1])
-                                   + (izeta[1:-2, None]
-                                      * g_by_L[:-2, None]*self.Q[:-2])
-                                   ) + dW[1:-1]
-
-                    dQ[-1] = dt*(Q_gradU[-1] - ((izeta[-2] + izeta[-1])
-                                                * g_by_L[-1]*self.Q[-1])
-                                 + izeta[-2]*g_by_L[-2]*self.Q[-2]
-                                 ) + dW[-1]
+                    dQ = build_dQ(dQ0, dt, self.Q, g_by_L, izeta)
 
                     # Compute new chain
                     new_Q = self.Q + dQ
@@ -213,19 +187,19 @@ class AdaptiveKramersChain:
                     RHS = RHS0 + 0.5/dt*np.sum(dQ**2, axis=1)
                 except FloatingPointError:
                     if FLAG:
-                        print('dptsv convergence failed.')
-                    raise ValueError('dptsv convergence failed.')
+                        print(f'dptsv convergence failed with dt={dt}.')
+                    raise ConvergenceError('dptsv convergence failed.')
             if err < LENGTH_TOL:
                 # Re normalise and exit loop
-                new_Q = np.sqrt(L2[:, None])*new_Q/np.sqrt(new_Q2[:, None])
+                new_Q = L[:, None]*new_Q/np.sqrt(new_Q2[:, None])
                 dQ = new_Q - self.Q
                 break
             elif i == MAXITER - 1:
                 if FLAG:
                     print(f"Could not converge in {MAXITER} "
                           "iterations.")
-                raise ValueError(f"Could not converge in {MAXITER} "
-                                 "iterations.")
+                raise ConvergenceError(f"Could not converge in {MAXITER} "
+                                       "iterations.")
         self.dQ = dQ
         self.tensions = g_by_L*L
         if self.avg_tensions is None:
@@ -290,6 +264,7 @@ class AdaptiveKramersChain:
         - there is a smooth transition zone (one level of recursion increment)
           with small rods.
         """
+        global FLAG
         # Check whether adapt is needed:
         if all(self.tensions < MERGE_THRESHOLD) and all(self.L2 < 1.5):
             return
@@ -331,6 +306,8 @@ class AdaptiveKramersChain:
                         subL += L[i]
                         i += 1
             self.Q = np.array(new_Q)
+            # print('New molecule with beads', len(self.Q))
+            # FLAG = True
             self.tensions = np.array(new_tensions)
             self._L2 = None
             self._beads = None
@@ -388,3 +365,62 @@ class AdaptiveKramersChain:
         content = '\n'.join(out)
         with open(file_name, 'w') as f:
             f.write(content)
+
+
+@jit(nopython=True)
+def filter(Qs, forces, L2):
+    """Filter forces to keep only orthogonal part"""
+    # Numpy implementation
+    # --------------------
+    # forces[1:-1] = (forces[1:-1]
+    #                 - (np.sum(forces[1:-1]*Qs[1:], axis=1)[:, None]*Qs[1:])
+    #                 - (np.sum(forces[1:-1]*Qs[:-1], axis=1)[:, None]*Qs[:-1])
+    #                 )
+    # # For start and end, just normal to the link
+    # forces[0] = forces[0] - np.sum(forces[0]*Qs[0])*Qs[0]
+    # forces[-1] = forces[-1] - np.sum(forces[-1]*Qs[-1])*Qs[-1]
+
+    # Numba
+    # -----
+    forces[0] = forces[0] - np.sum(forces[0]*Qs[0])*Qs[0]/L2[0]
+    for i in range(1, len(forces)-1):
+        forces[i] = (forces[i]
+                     - np.sum(forces[i]*Qs[i])*Qs[i]/L2[i]
+                     - np.sum(forces[i]*Qs[i-1])*Qs[i-1]/L2[i-1]
+                     )
+    forces[-1] = forces[-1] - np.sum(forces[-1]*Qs[-1])*Qs[-1]/L2[-1]
+    return forces
+
+
+@jit(nopython=True)
+def build_dQ(dQ0, dt, Q, g_by_L, izeta):
+    # Numpy implementation
+    # --------------------
+    # dQ[0] = dt*(Q_gradU[0] + izeta[1]*g_by_L[1]*self.Q[1]
+    #             - (izeta[1] + izeta[0])*g_by_L[0]*self.Q[0]
+    #             ) + dW[0]
+    #
+    # dQ[1:-1] = dt*(Q_gradU[1:-1]
+    #                + (izeta[2:-1, None]
+    #                   * g_by_L[2:, None]*self.Q[2:])
+    #                - ((izeta[1:-2, None] + izeta[2:-1, None])
+    #                   * g_by_L[1:-1, None]*self.Q[1:-1])
+    #                + (izeta[1:-2, None]
+    #                   * g_by_L[:-2, None]*self.Q[:-2])
+    #                ) + dW[1:-1]
+    #
+    # dQ[-1] = dt*(Q_gradU[-1] - ((izeta[-2] + izeta[-1])
+    #                             * g_by_L[-1]*self.Q[-1])
+    #              + izeta[-2]*g_by_L[-2]*self.Q[-2]
+    #              ) + dW[-1]
+    dQ = np.empty_like(dQ0)
+    dQ[0] = dQ0[0] + dt*(izeta[1]*g_by_L[1]*Q[1]
+                         - (izeta[1] + izeta[0])*g_by_L[0]*Q[0])
+    for i in range(1, len(Q)-1):
+        dQ[i] = dQ0[i] + dt*(izeta[i+1]*g_by_L[i+1]*Q[i+1]
+                             - (izeta[i] + izeta[i+1])*g_by_L[i]*Q[i]
+                             + izeta[i]*g_by_L[i-1]*Q[i-1]
+                             )
+    dQ[-1] = dQ0[-1] + dt*(- (izeta[-2] + izeta[-1])*g_by_L[-1]*Q[-1]
+                           + izeta[-2]*g_by_L[-2]*Q[-2])
+    return dQ

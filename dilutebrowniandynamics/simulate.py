@@ -7,6 +7,11 @@ from functools import partial
 SUBIT_MAX_LEVEL = 20
 
 
+class ConvergenceError(Exception):
+    """Exception to handle convergence error in simulation."""
+    pass
+
+
 def simulate_batch(molecules, gradU, n_rec, dt, n_proc=4):
     """Simulate forward in time a batch of molecules.
 
@@ -125,7 +130,7 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
                 # If this is a success, it means we can increment time:
                 subit += dt_local
 
-            except ValueError:
+            except ConvergenceError:
                 # Fail to evolve molecule. We subdivide the time step to
                 # increase stability and evolve again.
                 if level < SUBIT_MAX_LEVEL:

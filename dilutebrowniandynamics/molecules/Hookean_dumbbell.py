@@ -19,19 +19,25 @@ class HookeanDumbbell:
     dQ : ndarray (3,)
         Evolution vector
     """
-    def __init__(self, Q):
+    def __init__(self, Q, rng):
         self.Q = Q
         self.tension = None
-        self.rng = np.random.default_rng()
+        self.rng = rng
         self.dW = self.rng.standard_normal(3)
         self.dQ = None
 
     @classmethod
-    def from_normal_distribution(cls):
+    def from_normal_distribution(cls, seed=np.random.SeedSequence()):
         """Initialise a Dumbbell with a random vector drawn from a
-        normal distribution of variance 1/3."""
-        Q = np.sqrt(1./3)*np.random.standard_normal(3)
-        return cls(Q)
+        normal distribution of variance 1/3.
+
+        Parameters
+        ----------
+        seed : np.random.SeedSequence
+        """
+        rng = np.random.default_rng(seed)
+        Q = np.sqrt(1./3)*rng.standard_normal(3)
+        return cls(Q, rng)
 
     @property
     def coordinates(self):

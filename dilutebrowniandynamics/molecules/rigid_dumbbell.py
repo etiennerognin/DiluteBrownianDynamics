@@ -1,5 +1,5 @@
 import numpy as np
-
+from ..simulate import ConvergenceError
 
 LENGTH_TOL = 1e-6
 
@@ -22,10 +22,10 @@ class RigidDumbbell:
     dQ : ndarray (3,)
         Evolution vector.
     """
-    def __init__(self, Q):
+    def __init__(self, Q, rng):
         self.Q = Q
         self.tension = None
-        self.rng = np.random.default_rng()
+        self.rng = rng
         self.dW = self.rng.standard_normal(3)
         # discard colinear part (note that dumbbell is unit vector)
         Q_dot_dW = np.sum(self.Q*self.dW)
@@ -33,12 +33,13 @@ class RigidDumbbell:
         self.dQ = None
 
     @classmethod
-    def from_normal_distribution(cls):
+    def from_normal_distribution(cls, seed=np.random.SeedSequence()):
         """Initialise a rigid Dumbbell with a random vector drawn from a
         normal distribution and rescaled to a unit vector."""
-        Q = np.random.standard_normal(3)
+        rng = np.random.default_rng(seed)
+        Q = rng.standard_normal(3)
         Q = Q/np.sqrt(np.sum(Q**2))
-        return cls(Q)
+        return cls(Q, rng)
 
     @property
     def coordinates(self):
@@ -60,7 +61,7 @@ class RigidDumbbell:
         new_Q = self.Q + self.dQ
         if np.abs(np.sum(new_Q**2) - 1.) > LENGTH_TOL:
             # Rigidity is broken
-            raise ValueError('Molecule length exceeded 1.')
+            raise ConvergenceError('Molecule length exceeded 1.')
 
     def measure(self):
         """Measure quantities from the systems.

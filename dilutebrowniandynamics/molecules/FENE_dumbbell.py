@@ -1,5 +1,5 @@
 import numpy as np
-
+from ..simulate import ConvergenceError
 
 LENGTH_TOL = 1e-6
 
@@ -23,23 +23,29 @@ class FENEDumbbell:
     dQ : ndarray (3,)
         Evolution vector.
     """
-    def __init__(self, Q, L_max):
+    def __init__(self, Q, rng, L_max):
         self.Q = Q
         self.L_max = L_max
         self.tension = None
-        self.rng = np.random.default_rng()
+        self.rng = rng
         self.dW = self.rng.standard_normal(3)
         self.dQ = None
 
     @classmethod
-    def from_normal_distribution(cls, L_max):
+    def from_normal_distribution(cls, L_max, seed=np.random.SeedSequence()):
         """Initialise a Dumbbell with a random vector drawn from a
-        normal distribution of variance 1/3."""
-        Q = np.sqrt(1./3)*np.random.standard_normal(3)
+        normal distribution of variance 1/3.
+
+        Parameters
+        ----------
+        seed : np.random.SeedSequence
+        """
+        rng = np.random.default_rng(seed)
+        Q = np.sqrt(1./3)*rng.standard_normal(3)
         while np.sum(Q**2) > L_max**2 - LENGTH_TOL:
             # Draw another molecule
-            Q = np.sqrt(1./3)*np.random.standard_normal(3)
-        return cls(Q, L_max)
+            Q = np.sqrt(1./3)*rng.standard_normal(3)
+        return cls(Q, rng, L_max)
 
     @property
     def coordinates(self):
@@ -58,7 +64,7 @@ class FENEDumbbell:
         new_Q = self.Q + self.dQ
         if np.sum(new_Q**2) > self.L_max**2 - LENGTH_TOL:
             # Finite extensibility is broken
-            raise ValueError('Molecule length exceeded L_max.')
+            raise ConvergenceError('Molecule length exceeded L_max.')
 
     def measure(self):
         """Measure quantities from the systems.

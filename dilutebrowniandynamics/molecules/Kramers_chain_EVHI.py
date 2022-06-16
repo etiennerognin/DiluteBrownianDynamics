@@ -1,7 +1,8 @@
 import numpy as np
 from scipy.linalg.lapack import dposv, dptsv
 from numpy.linalg import LinAlgError
-
+from ..simulate import ConvergenceError
+from numba import jit
 
 LENGTH_TOL = 1e-6
 MAXITER = 100
@@ -30,11 +31,11 @@ class KramersChainEVHI:
     _M : ndarray(N+1, N+1, 3, 3)
         Mobility matrices of the beads
     """
-    def __init__(self, Q, h_star):
+    def __init__(self, Q, rng, h_star):
         self.Q = Q
         self.h_star = h_star
         self.tensions = None
-        self.rng = np.random.default_rng()
+        self.rng = rng
         self.dW = self.stochastic_force()
         self.dQ = None
         self._EV = None
@@ -63,8 +64,7 @@ class KramersChainEVHI:
                 import matplotlib.pyplot as plt
                 plt.matshow(Gamma)
                 plt.show()
-                exit()
-                exit()
+                raise RuntimeError('Cholesky failed.')
             P2 = B @ Prior.reshape((3*(N+1),))
             Prior = P2.reshape((N+1, 3))
 
@@ -73,21 +73,15 @@ class KramersChainEVHI:
             # For inner beads, keep component that is only normal to both links
             # Note that vector products of aligned beads can be close to zero,
             # therefore removing scalar products is preferred.
-            Prior[1:-1] = (Prior[1:-1]
-                           - (np.sum(Prior[1:-1]*self.Q[1:], axis=1)[:, None]
-                              * self.Q[1:])
-                           - (np.sum(Prior[1:-1]*self.Q[:-1], axis=1)[:, None]
-                              * self.Q[:-1])
-                           )
-            # For start and end, just normal to the link
-            Prior[0] = Prior[0] - np.sum(Prior[0]*self.Q[0])*self.Q[0]
-            Prior[-1] = Prior[-1] - np.sum(Prior[-1]*self.Q[-1])*self.Q[-1]
+            Prior = filter(self.Q, Prior)
 
         # ...gives correlated Brownian force on rods:
         return Prior[1:] - Prior[:-1]
 
     @classmethod
-    def from_normal_distribution(cls, n_links, h_star):
+    def from_normal_distribution(cls, n_links,
+                                 h_star=0.564189,
+                                 seed=np.random.SeedSequence()):
         """Initialise a Kramers chain as a collection of vectors drawn from a
         normal distribution and rescaled to a unit vector.
         Parameters
@@ -100,10 +94,11 @@ class KramersChainEVHI:
         KramersChain object
             Random Kramers chain.
         """
-        Q = np.random.standard_normal((n_links, 3))
+        rng = np.random.default_rng(seed)
+        Q = rng.standard_normal((n_links, 3))
         norms = np.sqrt(np.sum(Q**2, axis=1))
         Q = Q/norms[:, None]
-        return cls(Q, h_star)
+        return cls(Q, rng, h_star)
 
     @property
     def coordinates(self):
@@ -125,14 +120,8 @@ class KramersChainEVHI:
         if self._EV is None:
             X = self.coordinates
             # Interactions between beads
-            self._EV = np.zeros_like(X)
-            # # Loop over pairs of beads:
-            for i in range(len(self)+1):
-                for j in range(i+1, len(self)+1):
-                    R = X[i]-X[j]
-                    drift = fromGaussianPotential(R, height=2., sigma=1.)
-                    self._EV[i] += drift
-                    self._EV[j] -= drift
+            self._EV = build_EV(X, height=2., sigma=1.)
+
         return self._EV
 
     @property
@@ -140,15 +129,8 @@ class KramersChainEVHI:
         """Compute mobility matrices. Cached property."""
         if self._M is None:
             X = self.coordinates
-            N = len(self)
-            self._M = np.empty((N+1, N+1, 3, 3))
-            for i in range(N+1):
-                self._M[i, i] = np.eye(3)
-                for j in range(i+1, N+1):
-                    R = X[i]-X[j]
-                    S = RotnePragerYamakawa(R, h_star=self.h_star)
-                    self._M[i, j] = S
-                    self._M[j, i] = S
+            self._M = build_M(X, h_star=self.h_star)
+
         return self._M
 
     def solve(self, gradU, dt):
@@ -167,36 +149,24 @@ class KramersChainEVHI:
 
         N = len(self)
 
-        # Right hand side
-        dW = np.sqrt(2*dt)*self.dW
-        Q_gradU = self.Q @ gradU
-        Q_gradU_Q = np.sum(Q_gradU*self.Q, axis=1)
-        dW_dot_Q = np.sum(dW*self.Q, axis=1)
-        # Exculded volume
+        # Exculded volume for rods
         M2 = self.M[1:] - self.M[:-1]
         rodEV = (M2.transpose((0, 2, 1, 3)).reshape((3*N, 3*(N+1)))
                  @ self.EV.reshape((3*(N+1),)))
         rodEV = rodEV.reshape((N, 3))
-        EV_dot_Q = np.sum(rodEV*self.Q, axis=1)
-        # Assemble right-hand-side
-        RHS0 = Q_gradU_Q + EV_dot_Q + dW_dot_Q/dt
+
+        # dQ without internal tensions
+        dQ0 = dt*(self.Q @ gradU + rodEV) + np.sqrt(2*dt)*self.dW
+
+        # Right hand side
+        # ---------------
+        RHS0 = np.sum(dQ0*self.Q, axis=1)/dt
         RHS = RHS0.copy()
 
         # Dense matrix
+        # ------------
         # Note: `M_Q` is not symmetric while `a` is.
-        a = np.empty((N, N))
-        M_Q = np.empty((N, N, 3))
-
-        for i in range(N):
-            for j in range(N):
-                M_Q[i, j] = (self.M[i, j]
-                             + self.M[i+1, j+1]
-                             - self.M[i+1, j]
-                             - self.M[i, j+1]
-                             ) @ self.Q[j]
-                a[i, j] = M_Q[i, j] @ self.Q[i]
-
-        dQ = np.empty_like(self.Q)
+        a, M_Q = build_a_M_Q(self.M, self.Q)
 
         for i in range(MAXITER):
             with np.errstate(over='raise', invalid='raise'):
@@ -204,10 +174,7 @@ class KramersChainEVHI:
                     # Solve the system, see NOTES
                     tensions = dposv(a, RHS)[1]
 
-                    for k in range(N):
-                        dQ[k] = dt*(Q_gradU[k] + rodEV[k]
-                                    - np.sum(tensions[:, None]*M_Q[k], axis=0)
-                                    ) + dW[k]
+                    dQ = build_dQ(dQ0, dt, M_Q, tensions)
 
                     # Compute new chain
                     new_Q = self.Q + dQ
@@ -218,15 +185,15 @@ class KramersChainEVHI:
                     # update the right-hand-side
                     RHS = RHS0 + 0.5/dt*np.sum(dQ**2, axis=1)
                 except FloatingPointError:
-                    raise ValueError('dptsv convergence failed.')
+                    raise ConvergenceError('dptsv convergence failed.')
             if err < LENGTH_TOL:
                 # Re normalise and exit loop
                 new_Q = new_Q/np.sqrt(L[:, None])
                 dQ = new_Q - self.Q
                 break
             elif i == MAXITER - 1:
-                raise ValueError(f"Could not converge in {MAXITER} "
-                                 "iterations.")
+                raise ConvergenceError(f"Could not converge in {MAXITER} "
+                                       "iterations.")
 
         self.dQ = dQ
         self.tensions = tensions
@@ -360,23 +327,20 @@ class KramersChainEVHI:
         and requires smaller time step.
         """
         # Right hand side
-        dW = np.sqrt(2*dt)*self.dW
-        Q_gradU = self.Q @ gradU
-        Q_gradU_Q = np.sum(Q_gradU*self.Q, axis=1)
-        dW_dot_Q = np.sum(dW*self.Q, axis=1)
-        rodEV = self.EV[1:]-self.EV[:-1]
-        EV_dot_Q = np.sum(rodEV*self.Q, axis=1)
-        RHS0 = Q_gradU_Q + EV_dot_Q + dW_dot_Q/dt
+        # dQ without internal tensions
+        dQ0 = dt*(self.Q @ gradU) + np.sqrt(2*dt)*self.dW
+
+        # Right hand side
+        # ---------------
+        RHS0 = np.sum(dQ0*self.Q, axis=1)/dt
+        RHS = RHS0.copy()
 
         # Tridiagonal matrix
+        # ------------------
         # Low diagonal elements & upper diagonal elements
         dlu = - np.sum(self.Q[1:]*self.Q[:-1], axis=1)
         # Diagonal elements
         d = np.ones(len(self.Q))*2.
-
-        RHS = RHS0.copy()
-
-        dQ = np.zeros_like(self.Q)
 
         for i in range(MAXITER):
             with np.errstate(over='raise', invalid='raise'):
@@ -384,20 +348,7 @@ class KramersChainEVHI:
                     # Solve the system, see NOTES
                     tensions = dptsv(d, dlu, RHS)[2]
 
-                    dQ[0] = dt*(Q_gradU[0] + rodEV[0] + tensions[1]*self.Q[1]
-                                - 2*tensions[0]*self.Q[0]
-                                ) + dW[0]
-
-                    dQ[1:-1] = dt*(Q_gradU[1:-1] + rodEV[1:-1]
-                                   + tensions[2:, None]*self.Q[2:]
-                                   - 2*tensions[1:-1, None]*self.Q[1:-1]
-                                   + tensions[:-2, None]*self.Q[:-2]
-                                   ) + dW[1:-1]
-
-                    dQ[-1] = dt*(Q_gradU[-1] + rodEV[-1]
-                                 - 2*tensions[-1]*self.Q[-1]
-                                 + tensions[-2]*self.Q[-2]
-                                 ) + dW[-1]
+                    dQ = build_dQ_free_draining(dQ0, dt, self.Q, tensions)
 
                     # Compute new chain
                     new_Q = self.Q + dQ
@@ -408,15 +359,15 @@ class KramersChainEVHI:
                     # update the right-hand-side
                     RHS = RHS0 + 0.5/dt*np.sum(dQ**2, axis=1)
                 except FloatingPointError:
-                    raise ValueError('dptsv convergence failed.')
+                    raise ConvergenceError('dptsv convergence failed.')
             if err < LENGTH_TOL:
                 # Re normalise and exit loop
                 new_Q = new_Q/np.sqrt(L[:, None])
                 dQ = new_Q - self.Q
                 break
             elif i == MAXITER - 1:
-                raise ValueError(f"Could not converge in {MAXITER} "
-                                 "iterations.")
+                raise ConvergenceError(f"Could not converge in {MAXITER} "
+                                       "iterations.")
         self.dQ = dQ
         self.tensions = tensions
 
@@ -446,6 +397,7 @@ def LennardJones(R, depth=1., radius=1.):
         return np.zeros(3)
 
 
+@jit(nopython=True)
 def fromGaussianPotential(R, height=1., sigma=1.):
     """Drift due to a Gaussian potential.
 
@@ -466,7 +418,8 @@ def fromGaussianPotential(R, height=1., sigma=1.):
     return height/sigma**2*np.exp(-0.5*R2/sigma**2)*R
 
 
-def RotnePragerYamakawa(R, h_star=0.5641895835477563):
+@jit(nopython=True)
+def RotnePragerYamakawa(R, h_star):
     """Compute Rotne-Prager-Yamakawa mobility tensor.
 
     Parameters
@@ -491,3 +444,137 @@ def RotnePragerYamakawa(R, h_star=0.5641895835477563):
     else:
         return (0.75*a/normR*((1+2*a**2/(3*R2))*np.eye(3)
                               + (1-2*a**2/R2)*np.outer(R, R)/R2))
+
+
+@jit(nopython=True)
+def filter(Qs, forces):
+    """Filter forces to keep only orthogonal part"""
+    # Numpy implementation
+    # --------------------
+    # forces[1:-1] = (forces[1:-1]
+    #                 - (np.sum(forces[1:-1]*Qs[1:], axis=1)[:, None]*Qs[1:])
+    #                 - (np.sum(forces[1:-1]*Qs[:-1], axis=1)[:, None]*Qs[:-1])
+    #                 )
+    # # For start and end, just normal to the link
+    # forces[0] = forces[0] - np.sum(forces[0]*Qs[0])*Qs[0]
+    # forces[-1] = forces[-1] - np.sum(forces[-1]*Qs[-1])*Qs[-1]
+
+    # Numba
+    # -----
+    forces[0] = forces[0] - np.sum(forces[0]*Qs[0])*Qs[0]
+    for i in range(1, len(forces)-1):
+        forces[i] = (forces[i]
+                     - np.sum(forces[i]*Qs[i])*Qs[i]
+                     - np.sum(forces[i]*Qs[i-1])*Qs[i-1]
+                     )
+    forces[-1] = forces[-1] - np.sum(forces[-1]*Qs[-1])*Qs[-1]
+    return forces
+
+
+@jit(nopython=True)
+def build_EV(X, height, sigma):
+    """Compiled version to calculate exculded volume"""
+    # Numpy implementation
+    # --------------------
+    # self._EV = np.zeros_like(X)
+    # # # Loop over pairs of beads:
+    # for i in range(len(self)+1):
+    #     for j in range(i+1, len(self)+1):
+    #         R = X[i]-X[j]
+    #         drift = fromGaussianPotential(R, height=2., sigma=1.)
+    #         self._EV[i] += drift
+    #         self._EV[j] -= drift
+    EV = np.zeros_like(X)
+    # # Loop over pairs of beads:
+    for i in range(len(X)):
+        for j in range(i+1, len(X)):
+            R = X[i]-X[j]
+            drift = fromGaussianPotential(R, height, sigma)
+            EV[i] += drift
+            EV[j] -= drift
+    return EV
+
+
+@jit(nopython=True)
+def build_M(X, h_star):
+    """Compiled version to calculate exculded volume"""
+    # Numpy implementation
+    # --------------------
+    # N = len(self)
+    # self._M = np.empty((N+1, N+1, 3, 3))
+    # for i in range(N+1):
+    #     self._M[i, i] = np.eye(3)
+    #     for j in range(i+1, N+1):
+    #         R = X[i]-X[j]
+    #         S = RotnePragerYamakawa(R, h_star=self.h_star)
+    #         self._M[i, j] = S
+    #         self._M[j, i] = S
+    N = len(X)
+    M = np.empty((N, N, 3, 3))
+    for i in range(N):
+        M[i, i] = np.eye(3)
+        for j in range(i+1, N):
+            R = X[i]-X[j]
+            S = RotnePragerYamakawa(R, h_star)
+            M[i, j] = S
+            M[j, i] = S
+    return M
+
+
+@jit(nopython=True)
+def build_a_M_Q(M, Q):
+    """Compiled version to calculate system matrix and part RHS"""
+    # Numpy implementation
+    # --------------------
+    # a = np.empty((N, N))
+    # M_Q = np.empty((N, N, 3))
+    # M1 = (self.M[:-1, :-1] + self.M[1:, 1:]
+    #       - self.M[1:, :-1] - self.M[:-1, 1:])
+    #
+    # for i in range(N):
+    #     for j in range(N):
+    #         M_Q[i, j] = M1[i, j] @ self.Q[j]
+    #         a[i, j] = M_Q[i, j] @ self.Q[i]
+    N = len(Q)
+    a = np.empty((N, N))
+    M_Q = np.empty((N, N, 3))
+    dM = (M[:-1, :-1] + M[1:, 1:]
+          - M[1:, :-1] - M[:-1, 1:])
+
+    for i in range(N):
+        for j in range(N):
+            V = dM[i, j] @ Q[j]
+            M_Q[i, j] = V
+            a[i, j] = V @ Q[i]
+
+    return a, M_Q
+
+
+@jit(nopython=True)
+def build_dQ(dQ0, dt, M_Q, tensions):
+    """Compiled version to calculate new dQ from freshly solved tensions"""
+    # Numpy implementation
+    # --------------------
+    # for k in range(N):
+    #     dQ[k] = dt*(Q_gradU[k] + rodEV[k]
+    #                 - np.sum(tensions[:, None]*M_Q[k], axis=0)
+    #                 ) + dW[k]
+    N = len(dQ0)
+    dQ = np.empty_like(dQ0)
+    for i in range(N):
+        dQ[i] = dQ0[i] - dt*np.sum(tensions.reshape((N, 1))*M_Q[i], axis=0)
+    return dQ
+
+
+@jit(nopython=True)
+def build_dQ_free_draining(dQ0, dt, Q, tensions):
+    """Compiled version to build dQ"""
+    dQ = np.empty_like(Q)
+    dQ[0] = dQ0[0] + dt*(tensions[1]*Q[1] - 2*tensions[0]*Q[0])
+    for i in range(1, len(dQ)-1):
+        dQ[i] = dQ0[i] + dt*(tensions[i-1]*Q[i-1]
+                             - 2*tensions[i]*Q[i]
+                             + tensions[i+1]*Q[i+1])
+    dQ[-1] = dQ0[-1] + dt*(- 2*tensions[-1]*Q[-1]
+                           + tensions[-2]*Q[-2])
+    return dQ
