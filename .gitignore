@@ -5,6 +5,7 @@ dist
 docs/_build
 docs/_static
 docs/_templates
+docs/_refs
 
 # Examples data
 examples/inputs
