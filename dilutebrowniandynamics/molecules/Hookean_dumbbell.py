@@ -10,8 +10,8 @@ class HookeanDumbbell:
     ----------
     Q : ndarray (3,)
         Coorinates of the dumbbell vector.
-    tension : float
-        Internal tension.
+    H0 : float
+        Spring coefficient. Here trivially 1.
     rng : Generator
         Random number generator.
     dW : ndarray (3,)
@@ -21,22 +21,22 @@ class HookeanDumbbell:
     """
     def __init__(self, Q, rng):
         self.Q = Q
-        self.tension = None
+        self.H0 = 1
         self.rng = rng
         self.dW = self.rng.standard_normal(3)
         self.dQ = None
 
     @classmethod
     def from_normal_distribution(cls, seed=np.random.SeedSequence()):
-        """Initialise a Dumbbell with a random vector drawn from a
-        normal distribution of variance 1/3.
+        """Initialise a Dumbbell with a random vector drawn from a standard
+        normal distribution.
 
         Parameters
         ----------
         seed : np.random.SeedSequence
         """
         rng = np.random.default_rng(seed)
-        Q = np.sqrt(1./3)*rng.standard_normal(3)
+        Q = rng.standard_normal(3)
         return cls(Q, rng)
 
     @property
@@ -48,8 +48,7 @@ class HookeanDumbbell:
 
     def solve(self, gradU, dt):
         """Solve tension according to current random forces and constraints."""
-        self.tension = 1.
-        self.dQ = dt*(self.Q @ (gradU - 0.5*np.eye(3))) + np.sqrt(dt/3)*self.dW
+        self.dQ = dt*(self.Q @ gradU - 0.5*self.Q) + np.sqrt(dt)*self.dW
 
     def measure(self):
         """Measure quantities from the systems.
@@ -59,9 +58,6 @@ class HookeanDumbbell:
         observables : dict
             Dictionary of observables quantities.
         """
-        if self.tension is None:
-            raise RuntimeError("Attempt to measure tension but tension not "
-                               "solved.")
         # Molecurlar conformation tensor
         A = np.outer(self.Q, self.Q)
         # Molecular stress
@@ -81,5 +77,4 @@ class HookeanDumbbell:
         """
         self.Q += self.dQ
         # draw new random forces
-        self.tension = None
         self.dW = self.rng.standard_normal(3)

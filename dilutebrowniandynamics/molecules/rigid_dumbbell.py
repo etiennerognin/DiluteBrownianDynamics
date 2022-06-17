@@ -7,14 +7,15 @@ LENGTH_TOL = 1e-6
 class RigidDumbbell:
     """Rigid dumbbell molecule object. A rigid Dumbbell is essentially a
     vector of fixed length connecting two beads. The tension is given by the
-    rigidity constraint. The length is 1.
+    rigidity constraint. The squared length is 3 to stick to Hookean dumbbell
+    convention.
 
     Attributes
     ----------
     Q : ndarry (3,)
         Coorinates of the vector.
-    tension : float
-        Internal tension.
+    H : float
+        Dimensionless spring coefficient. Here given by constraint
     rng : Generator
         Random number generator.
     dW : ndarray (3,)
@@ -26,20 +27,22 @@ class RigidDumbbell:
         self.Q = Q
         self.tension = None
         self.rng = rng
-        self.dW = self.rng.standard_normal(3)
-        # discard colinear part (note that dumbbell is unit vector)
-        Q_dot_dW = np.sum(self.Q*self.dW)
-        self.dW = self.dW - Q_dot_dW*self.Q
+        self.dW = self.stochastic_force()
         self.dQ = None
 
     @classmethod
     def from_normal_distribution(cls, seed=np.random.SeedSequence()):
         """Initialise a rigid Dumbbell with a random vector drawn from a
-        normal distribution and rescaled to a unit vector."""
+        normal distribution and rescaled to vector of length sqrt(3)."""
         rng = np.random.default_rng(seed)
         Q = rng.standard_normal(3)
-        Q = Q/np.sqrt(np.sum(Q**2))
+        Q = Q/np.sqrt(np.sum(Q**2))*np.sqrt(3)
         return cls(Q, rng)
+
+    def stochastic_force(self):
+        """Draw random force removing colinear part (noise)"""
+        dW = self.rng.standard_normal(3)
+        return dW - np.sum(dW*self.Q)*self.Q/3
 
     @property
     def coordinates(self):
@@ -50,18 +53,21 @@ class RigidDumbbell:
 
     def solve(self, gradU, dt):
         """Solve tension according to current random forces and constraints."""
-        A = (self.Q @ gradU)*dt + np.sqrt(dt/3)*self.dW
-        QdotA = np.sum(self.Q*A)
-        A2 = np.sum(A**2)
-        self.tension = 2*(QdotA + 1 - np.sqrt(1 + QdotA**2 - A2))/dt
+        # Part without tension
+        dQ0 = (self.Q @ gradU)*dt + np.sqrt(dt)*self.dW
+        # To enforce rigidity, we need 2Q.dQ + dQ²=0, which leeds to solving
+        # 3/4*x^2 - x*(3+Q.dQ0) + 2*Q.dQ0 + dQ0^2 = 0
+        Q_dot_dQ0 = np.sum(self.Q*dQ0)
+        self.H = (3 + Q_dot_dQ0
+                  - np.sqrt(9 + Q_dot_dQ0**2 - 3*np.sum(dQ0**2))
+                  )/(3*dt/2)
 
-        self.dQ = (dt*(self.Q @ (gradU - 0.5*self.tension*np.eye(3)))
-                   + np.sqrt(dt/3)*self.dW)
+        self.dQ = dQ0 - 0.5*self.H*self.Q*dt
 
         new_Q = self.Q + self.dQ
-        if np.abs(np.sum(new_Q**2) - 1.) > LENGTH_TOL:
+        if np.abs(np.sum(new_Q**2) - 3.) > LENGTH_TOL:
             # Rigidity is broken
-            raise ConvergenceError('Molecule length exceeded 1.')
+            raise ConvergenceError('Molecule length exceeded sqrt(3)')
 
     def measure(self):
         """Measure quantities from the systems.
@@ -71,13 +77,10 @@ class RigidDumbbell:
         observables : dict
             Dictionary of observables quantities.
         """
-        if self.tension is None:
-            raise RuntimeError("Attempt to measure tension but tension not "
-                               "solved.")
         # Molecurlar conformation tensor
         A = np.outer(self.Q, self.Q)
         # Molecular stress
-        S = np.outer(self.tension*self.Q, self.Q)
+        S = np.outer(self.H*self.Q, self.Q)
         observables = {'A': A, 'S': S}
         return observables
 
@@ -93,8 +96,4 @@ class RigidDumbbell:
         """
         self.Q += self.dQ
         # draw new random forces
-        self.tension = None
-        self.dW = self.rng.standard_normal(3)
-        # discard colinear part (note that dumbbell is unit vector)
-        Q_dot_dW = np.sum(self.Q*self.dW)
-        self.dW = self.dW - Q_dot_dW*self.Q
+        self.dW = self.stochastic_force()

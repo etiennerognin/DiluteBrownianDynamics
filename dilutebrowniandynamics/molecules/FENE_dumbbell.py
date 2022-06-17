@@ -13,9 +13,9 @@ class FENEDumbbell:
     Q : ndarray (3,)
         Coorinates of the vector.
     L_max : float
-        Maximim dumbbell length
-    tension : float
-        Internal tension.
+        Maximim dimensionless dumbbell length
+    H : float
+        Dimensionless spring coefficient. Here given by (1-Q^2/L_max^2)^-1
     rng : Generator
         Random number generator.
     dW : ndarray (3,)
@@ -26,25 +26,25 @@ class FENEDumbbell:
     def __init__(self, Q, rng, L_max):
         self.Q = Q
         self.L_max = L_max
-        self.tension = None
+        self.H = None
         self.rng = rng
         self.dW = self.rng.standard_normal(3)
         self.dQ = None
 
     @classmethod
     def from_normal_distribution(cls, L_max, seed=np.random.SeedSequence()):
-        """Initialise a Dumbbell with a random vector drawn from a
-        normal distribution of variance 1/3.
+        """Initialise a Dumbbell with a random vector drawn from a standard
+        normal distribution.
 
         Parameters
         ----------
         seed : np.random.SeedSequence
         """
         rng = np.random.default_rng(seed)
-        Q = np.sqrt(1./3)*rng.standard_normal(3)
+        Q = rng.standard_normal(3)
         while np.sum(Q**2) > L_max**2 - LENGTH_TOL:
             # Draw another molecule
-            Q = np.sqrt(1./3)*rng.standard_normal(3)
+            Q = rng.standard_normal(3)
         return cls(Q, rng, L_max)
 
     @property
@@ -56,10 +56,10 @@ class FENEDumbbell:
 
     def solve(self, gradU, dt):
         """Solve tension according to current random forces and constraints."""
-        self.tension = self.L_max**2/(self.L_max**2-np.sum(self.Q**2))
+        self.H = self.L_max**2/(self.L_max**2-np.sum(self.Q**2))
 
-        self.dQ = (dt*(self.Q @ (gradU - 0.5*self.tension*np.eye(3)))
-                   + np.sqrt(dt/3)*self.dW)
+        self.dQ = (dt*(self.Q @ gradU - 0.5*self.H*self.Q)
+                   + np.sqrt(dt)*self.dW)
 
         new_Q = self.Q + self.dQ
         if np.sum(new_Q**2) > self.L_max**2 - LENGTH_TOL:
@@ -74,13 +74,13 @@ class FENEDumbbell:
         observables : dict
             Dictionary of observables quantities.
         """
-        if self.tension is None:
+        if self.H is None:
             raise RuntimeError("Attempt to measure tension but tension not "
                                "solved.")
         # Molecurlar conformation tensor
         A = np.outer(self.Q, self.Q)
         # Molecular stress
-        S = np.outer(self.tension*self.Q, self.Q)
+        S = np.outer(self.H*self.Q, self.Q)
         observables = {'A': A, 'S': S}
         return observables
 
