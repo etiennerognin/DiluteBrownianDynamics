@@ -1,0 +1,7 @@
+numpy
+numba
+scipy
+matplotlib
+tqdm
+multiprocessing
+functools

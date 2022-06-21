@@ -9,13 +9,17 @@ MAXITER = 100
 FILTER_NOISE = True
 
 
-class KramersChainEVHI:
-    """Kramers chain with excluded volume and hydrodynamic interactions.
+class AdaptiveKramersChainEVHI:
+    """Adaptive Kramers chain with excluded volume and hydrodynamic interactions.
 
     Attributes
     ----------
     Q : ndarry (N, 3)
         Coorinates of the vectors.
+    _L2 : ndarray(N,)
+        Links length squared. Cached property.
+    _beads : ndarray(N+1,)
+        Weights (radii) of beads. Cached property.
     tensions : ndarray (N,)
         Internal tensions.
     rng : Generator
@@ -31,11 +35,11 @@ class KramersChainEVHI:
     _M : ndarray(N+1, N+1, 3, 3)
         Mobility matrices of the beads
     """
-    def __init__(self, Q, rng, h_star, EVheight, EVsigma):
+    def __init__(self, Q, rng, h_star):
         self.Q = Q
         self.h_star = h_star
-        self.EVheight = EVheight
-        self.EVsigma = EVsigma
+        self._L2 = None
+        self._beads = None
         self.tensions = None
         self.avg_tensions = None
         self.subit = 0.
@@ -54,7 +58,8 @@ class KramersChainEVHI:
         proportional to bead size."""
 
         # Uncorrelated forces on beads...
-        Prior = self.rng.standard_normal((len(self)+1, 3))
+        w = self.beads
+        Prior = self.rng.standard_normal((len(self)+1, 3))/np.sqrt(w[:, None])
 
         # Correlation due to HI
         if self.h_star > 0:
@@ -77,43 +82,32 @@ class KramersChainEVHI:
             # For inner beads, keep component that is only normal to both links
             # Note that vector products of aligned beads can be close to zero,
             # therefore removing scalar products is preferred.
-            Prior = filter(self.Q, Prior)
+            Prior = filter(self.Q, Prior, self.L2)
 
         # ...gives correlated Brownian force on rods:
         return Prior[1:] - Prior[:-1]
 
     @classmethod
     def from_normal_distribution(cls, n_links,
-                                 h_star=0.2,
-                                 seed=np.random.SeedSequence(),
-                                 EVheight=1.,
-                                 EVsigma=1.
-                                 ):
+                                 h_star=0.564189,
+                                 seed=np.random.SeedSequence()):
         """Initialise a Kramers chain as a collection of vectors drawn from a
         normal distribution and rescaled to a unit vector.
         Parameters
         ----------
         n_links : int
             Number of links in the chain.
-        h_star : float
-            Strength of hydrodynamic interactions.
-        EVheight : float
-            Height of the Gaussian potential.
-        EVsigma : float
-            Standard deviation of the Gaussian potential.
-        seed : SeedSequence
-            Numpy SeedSequence for thread-safe random number generation.
 
         Returns
         -------
-        KramersChainEVHI object
+        KramersChain object
             Random Kramers chain.
         """
         rng = np.random.default_rng(seed)
         Q = rng.standard_normal((n_links, 3))
         norms = np.sqrt(np.sum(Q**2, axis=1))
         Q = Q/norms[:, None]
-        return cls(Q, rng, h_star, EVheight, EVsigma)
+        return cls(Q, rng, h_star)
 
     @property
     def coordinates(self):
@@ -130,12 +124,33 @@ class KramersChainEVHI:
         return np.sum(self.Q, axis=0)
 
     @property
+    def L2(self):
+        """Length of each link rounded to the next integer. Note: dtype remains
+        float."""
+        if self._L2 is None:
+            self._L2 = np.rint(np.sum(self.Q**2, axis=1))
+        return self._L2
+
+    @property
+    def beads(self):
+        """Beads radius (or normalised friction) according to the splitting
+        rule: 0.5*(L_{i-1} + L_{i})"""
+        if self._beads is None:
+            w = np.empty(len(self)+1)
+            L = np.sqrt(self.L2)
+            w[0] = 0.5*(1. + L[0])
+            w[-1] = 0.5*(L[-1] + 1.)
+            w[1:-1] = 0.5*(L[:-1] + L[1:])
+            self._beads = w
+        return self._beads
+
+    @property
     def EV(self):
         """Computes excluded volume interactions. Cached property."""
         if self._EV is None:
             X = self.coordinates
             # Interactions between beads
-            self._EV = build_EV(X, height=self.EVheight, sigma=self.EVsigma)
+            self._EV = build_EV(X, height=2., sigma=1.)
 
         return self._EV
 
@@ -186,7 +201,7 @@ class KramersChainEVHI:
         for i in range(MAXITER):
             with np.errstate(over='raise', invalid='raise'):
                 try:
-                    # Solve the system
+                    # Solve the system, see NOTES
                     tensions = dposv(a, RHS)[1]
 
                     dQ = build_dQ(dQ0, dt, M_Q, tensions)
@@ -331,8 +346,10 @@ class KramersChainEVHI:
         # HI
         if self._M is not None:
             out.append(f"hydrodynamic 6 {len(self)+1} float")
-            allHI = combine_HI(self._M)
-            for HI in allHI:
+            for Mi in self._M:
+                HI = np.zeros((3, 3))
+                for Mij in Mi:
+                    HI += Mij
                 out.append(f"{HI[0,0]} {HI[0,1]} {HI[0,2]} "
                            f"{HI[1,1]} {HI[1,2]} {HI[2,2]}")
             out.append("")
@@ -361,12 +378,7 @@ class KramersChainEVHI:
         """
         # Right hand side
         # dQ without internal tensions
-        if self.EVheight**2 > 1e-6:
-            rodEV = self.EV[1:] - self.EV[:-1]
-            dQ0 = dt*(self.Q @ gradU + rodEV) + np.sqrt(2*dt)*self.dW
-        else:
-            # No EV effects
-            dQ0 = dt*(self.Q @ gradU) + np.sqrt(2*dt)*self.dW
+        dQ0 = dt*(self.Q @ gradU) + np.sqrt(2*dt)*self.dW
 
         # Right hand side
         # ---------------
@@ -485,7 +497,7 @@ def RotnePragerYamakawa(R, h_star):
 
 
 @jit(nopython=True)
-def filter(Qs, forces):
+def filter(Qs, forces, L2):
     """Filter forces to keep only orthogonal part"""
     # Numpy implementation
     # --------------------
@@ -499,13 +511,13 @@ def filter(Qs, forces):
 
     # Numba
     # -----
-    forces[0] = forces[0] - np.sum(forces[0]*Qs[0])*Qs[0]
+    forces[0] = forces[0] - np.sum(forces[0]*Qs[0])*Qs[0]/L2[0]
     for i in range(1, len(forces)-1):
         forces[i] = (forces[i]
-                     - np.sum(forces[i]*Qs[i])*Qs[i]
-                     - np.sum(forces[i]*Qs[i-1])*Qs[i-1]
+                     - np.sum(forces[i]*Qs[i])*Qs[i]/L2[i]
+                     - np.sum(forces[i]*Qs[i-1])*Qs[i-1]/L2[i-1]
                      )
-    forces[-1] = forces[-1] - np.sum(forces[-1]*Qs[-1])*Qs[-1]
+    forces[-1] = forces[-1] - np.sum(forces[-1]*Qs[-1])*Qs[-1]/L2[-1]
     return forces
 
 
@@ -616,13 +628,3 @@ def build_dQ_free_draining(dQ0, dt, Q, tensions):
     dQ[-1] = dQ0[-1] + dt*(- 2*tensions[-1]*Q[-1]
                            + tensions[-2]*Q[-2])
     return dQ
-
-
-@jit(nopython=True)
-def combine_HI(M):
-    """Combine all hydrodynamic interactions on each bead"""
-    HI = np.zeros((len(M), 3, 3))
-    for i, Mi in enumerate(M):
-        for Mij in Mi:
-            HI[i] += Mij
-    return HI
