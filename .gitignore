@@ -10,6 +10,7 @@ docs/_refs
 # Examples data
 examples/inputs
 examples/outputs
+data/outputs
 
 **/*cache*
 
