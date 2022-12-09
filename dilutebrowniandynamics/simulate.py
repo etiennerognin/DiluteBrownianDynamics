@@ -12,7 +12,8 @@ class ConvergenceError(Exception):
     pass
 
 
-def simulate_batch(molecules, gradU, n_rec, dt, n_proc=4):
+def simulate_batch(molecules, gradU, dt, n_steps,
+                   write_interval=1, no_average=None, n_proc=4):
     """Simulate forward in time a batch of molecules.
 
     Parameters
@@ -22,10 +23,14 @@ def simulate_batch(molecules, gradU, n_rec, dt, n_proc=4):
     gradU : {callable, ndarray (3, 3)}
         Velocity gradient (3, 3) for the simulation. If `gradU` is
         callable, then it will be evaluated at each time step.
-    n_rec : int
-        Number of points to record.
     dt : float
         Dimensionless time step.
+    n_steps: int
+        Number of time steps to simulate.
+    write_interval: int, default 1
+        Record data every ``write_interval`` steps.
+    no_average : list of str
+        Molecular observable to exclude from batch averaging.
     n_proc : int, default 4
         Number of processor cores to use.
 
@@ -38,13 +43,14 @@ def simulate_batch(molecules, gradU, n_rec, dt, n_proc=4):
     """
     n_ensemble = len(molecules)
 
-    print("Physical time to compute:", n_rec*dt)
+    print("Physical time to compute:", n_steps*dt)
 
     simulate_para = partial(simulate,
                             gradU=gradU,
-                            n_rec=n_rec,
                             dt=dt,
-                            full_trajectory=False)
+                            n_steps=n_steps,
+                            write_interval=write_interval
+                            )
 
     with Pool(n_proc) as p:
         print("Calculation started on {} cores.".format(n_proc))
@@ -54,12 +60,13 @@ def simulate_batch(molecules, gradU, n_rec, dt, n_proc=4):
     # Compute average and standard deviation of observables
     observables_list = [obs for obs, molecule in results]
     molecules_out = [molecule for obs, molecule in results]
-    observables = _statistics(observables_list)
+    observables = _statistics(observables_list, no_average)
 
     return observables, molecules_out
 
 
-def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
+def simulate(molecule, gradU, dt, n_steps,
+             write_interval=1, full_trajectory=False, progress=False):
     """Simulate a molecule and collect data.
 
     Parameters
@@ -69,11 +76,13 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
     gradU : {callable, ndarray shape (3, 3)}
         Velocity gradient (3, 3) for the simulation. If `gradU` is callable,
         then it will be evaluated at each time step.
-    n_rec : int
-        Number of points to record.
     dt : float
         Dimensionless time step.
-    full_trajectory : bool
+    n_steps: int
+        Number of time steps to simulate.
+    write_interval: int, default 1
+        Record data every ``write_interval`` steps.
+    full_trajectory : bool, default False
         If True returns trajectory as a list of Molecule at each time step.
     progress : bool, default False
         If True, display tqdm progress bar.
@@ -98,16 +107,19 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
     dt_local = dt
 
     if progress:
-        iterations = tqdm.tqdm(range(n_rec))
+        iterations = tqdm.tqdm(range(n_steps))
     else:
-        iterations = range(n_rec)
+        iterations = range(n_steps)
 
     for i in iterations:
+        # print(i)
         subit = 0.    # Part of the time step job done
         first_subit = True  # Flag to indicate first sub-iteration
-        subobs = []   # Collection of observables which will be averaged
-        weights = []
-        while subit < dt:
+        if i % write_interval == 0:
+            subobs = []   # Collection of observables which will be averaged
+            weights = []
+
+        while subit < dt - dt/2**(SUBIT_MAX_LEVEL+1):
 
             # Evaluate velocity gradient
             if callable(gradU):
@@ -120,8 +132,9 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
                 molecule.solve(gradUt, dt_local)
                 # Measure whatever the model is set to output.
                 subobs.append(molecule.measure())
-                weights.append(0.5**level)
-                if full_trajectory and first_subit:
+                weights.append(0.5**level/write_interval)
+                if full_trajectory and (first_subit and
+                                        (i+1) % write_interval == 0):
                     trajectory.append(copy.deepcopy(molecule))
                 # Evolve the model by one time step.
                 molecule.evolve(first_subit=first_subit)
@@ -139,8 +152,8 @@ def simulate(molecule, gradU, n_rec, dt, full_trajectory, progress=False):
                 else:
                     raise RuntimeError("Convergence failed and maximum level "
                                        "of time step subdivision reached.")
-
-        observables.append(_sum_dict(subobs, weights))
+        if (i+1) % write_interval == 0:
+            observables.append(_sum_dict(subobs, weights))
 
         if level > 0:
             level += -1
@@ -188,7 +201,7 @@ def _dict_series(dicts):
     return series
 
 
-def _statistics(dicts):
+def _statistics(dicts, no_average):
     """Computes statistics from a list of dicts.
 
     Returns
@@ -202,4 +215,6 @@ def _statistics(dicts):
         frame = np.array([dict_[key] for dict_ in dicts])
         statistics[f"{key}_average"] = np.average(frame, axis=0)
         statistics[f"{key}_std"] = np.std(frame, axis=0)
+        if no_average is not None and key in no_average:
+            statistics[key] = frame
     return statistics

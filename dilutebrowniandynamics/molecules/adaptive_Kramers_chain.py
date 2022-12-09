@@ -144,7 +144,7 @@ class AdaptiveKramersChain:
         from 'Numerical Recipes' tridiagonal solver, which doesn't do pivoting
         and requires smaller time step.
         """
-        # Get ideal length of each link:
+        # Get ideal length squared of each link:
         L2 = self.L2
         # Corresponding length
         L = np.sqrt(L2)
@@ -220,14 +220,23 @@ class AdaptiveKramersChain:
         if self.tensions is None:
             raise RuntimeError("Attempt to measure tension but tension not "
                                "solved.")
-        # Molecurlar conformation tensor
+        # Molecular conformation tensor
         A = np.outer(self.REE, self.REE)
         # Molecular stress
         # Row-wise tensor dot:
         moments = self.tensions[:, None, None]*(self.Q[:, :, None]
                                                 * self.Q[:, None, :])
         S = np.sum(moments, axis=0)
-        observables = {'A': A, 'S': S}
+        g_max = np.amax(self.tensions)
+        # Real index (index along non-coarse chain)
+        fine_index = np.cumsum(self._beads)-1
+        i = np.argmax(self.tensions)
+        i_max = fine_index[i]
+        # tension at centre
+        coarse_i_centre = np.argmin(np.abs(fine_index-fine_index[-1]/2))
+        g_centre = self.tensions[coarse_i_centre]
+        observables = {'A': A, 'S': S, 'g_max': g_max, 'i_max': i_max,
+                       'g_centre': g_centre}
         return observables
 
     def evolve(self, first_subit):
