@@ -33,17 +33,17 @@ class KramersChainEVHI:
     """
     def __init__(self, Q, rng, h_star, EVheight, EVsigma):
         self.Q = Q
+        self.rng = rng
         self.h_star = h_star
         self.EVheight = EVheight
         self.EVsigma = EVsigma
         self.tensions = None
         self.avg_tensions = None
         self.subit = 0.
-        self.rng = rng
-        self.dW = self.stochastic_force()
         self.dQ = None
         self._EV = None
         self._M = None
+        self.dW = self.stochastic_force()
 
     def __len__(self):
         """Number of links in the chain"""
@@ -237,7 +237,11 @@ class KramersChainEVHI:
         moments = self.tensions[:, None, None]*(self.Q[:, :, None]
                                                 * self.Q[:, None, :])
         S = np.sum(moments, axis=0)
-        observables = {'A': A, 'S': S}
+
+        g = self.tensions
+
+        observables = {'A': A, 'S': S, 'g': g}
+
         return observables
 
     def evolve(self, first_subit):
@@ -523,13 +527,14 @@ def build_EV(X, height, sigma):
     #         self._EV[i] += drift
     #         self._EV[j] -= drift
     EV = np.zeros_like(X)
-    # # Loop over pairs of beads:
-    for i in range(len(X)):
-        for j in range(i+1, len(X)):
-            R = X[i]-X[j]
-            drift = fromGaussianPotential(R, height, sigma)
-            EV[i] += drift
-            EV[j] -= drift
+    if height*sigma:
+        # # Loop over pairs of beads:
+        for i in range(len(X)):
+            for j in range(i+1, len(X)):
+                R = X[i]-X[j]
+                drift = fromGaussianPotential(R, height, sigma)
+                EV[i] += drift
+                EV[j] -= drift
     return EV
 
 

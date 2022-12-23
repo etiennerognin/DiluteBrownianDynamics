@@ -63,7 +63,9 @@ class AdaptiveKramersChain:
             # For inner beads, keep component that is only normal to both links
             # Note that vector products of aligned beads can be close to zero,
             # therefore removing scalar products is preferred.
-            Prior = filter(self.Q, Prior, self.L2)
+            print(Prior)
+            Prior = filter(self.Q, Prior)
+            print(Prior)
 
         # ...gives correlated Brownian force on rods:
         return Prior[1:] - Prior[:-1]
@@ -144,7 +146,7 @@ class AdaptiveKramersChain:
         from 'Numerical Recipes' tridiagonal solver, which doesn't do pivoting
         and requires smaller time step.
         """
-        # Get ideal length of each link:
+        # Get ideal length squared of each link:
         L2 = self.L2
         # Corresponding length
         L = np.sqrt(L2)
@@ -220,14 +222,30 @@ class AdaptiveKramersChain:
         if self.tensions is None:
             raise RuntimeError("Attempt to measure tension but tension not "
                                "solved.")
-        # Molecurlar conformation tensor
+        # Molecular conformation tensor
         A = np.outer(self.REE, self.REE)
         # Molecular stress
         # Row-wise tensor dot:
         moments = self.tensions[:, None, None]*(self.Q[:, :, None]
                                                 * self.Q[:, None, :])
         S = np.sum(moments, axis=0)
-        observables = {'A': A, 'S': S}
+        # g_max = np.amax(self.tensions)
+        # # Real index (index along non-coarse chain)
+        # fine_index = np.cumsum(self._beads)-1
+        # i = np.argmax(self.tensions)
+        # i_max = fine_index[i]
+        # # tension at centre
+        # coarse_i_centre = np.argmin(np.abs(fine_index-fine_index[-1]/2))
+        # g_centre = self.tensions[coarse_i_centre]
+
+        # linearised tensions
+        L = np.sqrt(self.L2)
+        if any(L > 1):
+            g = build_fine_tensions(self.tensions, L)
+        else:
+            g = self.tensions
+
+        observables = {'A': A, 'S': S, 'g': g}
         return observables
 
     def evolve(self, first_subit):
@@ -368,7 +386,7 @@ class AdaptiveKramersChain:
 
 
 @jit(nopython=True)
-def filter(Qs, forces, L2):
+def filter(Qs, forces):
     """Filter forces to keep only orthogonal part"""
     # Numpy implementation
     # --------------------
@@ -382,13 +400,14 @@ def filter(Qs, forces, L2):
 
     # Numba
     # -----
-    forces[0] = forces[0] - np.sum(forces[0]*Qs[0])*Qs[0]/L2[0]
-    for i in range(1, len(forces)-1):
-        forces[i] = (forces[i]
-                     - np.sum(forces[i]*Qs[i])*Qs[i]/L2[i]
-                     - np.sum(forces[i]*Qs[i-1])*Qs[i-1]/L2[i-1]
-                     )
-    forces[-1] = forces[-1] - np.sum(forces[-1]*Qs[-1])*Qs[-1]/L2[-1]
+    alpha = np.ones(len(forces))
+
+    for i in range(1, len(forces)):
+        alpha[i] = (np.sum((forces[i]-forces[i-1])*Qs[i-1]) + alpha[i-1]*np.sum(Qs[i-1]**2))/np.sum(Qs[i-1]*Qs[i])
+
+    for i in range(len(forces)):
+        forces[i] = forces[i] - alpha[i]*Qs[i]
+
     return forces
 
 
@@ -424,3 +443,15 @@ def build_dQ(dQ0, dt, Q, g_by_L, izeta):
     dQ[-1] = dQ0[-1] + dt*(- (izeta[-2] + izeta[-1])*g_by_L[-1]*Q[-1]
                            + izeta[-2]*g_by_L[-2]*Q[-2])
     return dQ
+
+
+@jit(nopython=True)
+def build_fine_tensions(tensions, L):
+    N = int(np.sum(L))
+    fine_tensions = np.zeros(N)
+    i = 0
+    for length, g in zip(L, tensions):
+        for k in range(int(length)):
+            fine_tensions[i+k] = g
+        i += k + 1
+    return fine_tensions

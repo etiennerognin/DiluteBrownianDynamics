@@ -152,6 +152,65 @@ class KramersChain:
         self.dQ = dQ
         self.tensions = tensions
 
+    def solve1(self, gradU, dt):
+        """Solve tension according to current random forces and constraints.
+        Optimisation method
+
+        Parameters
+        ----------
+        gradU : (3, 3) ndarray
+            Velocity gradient, dvj/dxi convention.
+        dt : float
+            Time step.
+
+        Notes
+        -----
+        Optimisation method. Use a pseudo-Newton algorithm where only the
+        diagonal of the Hessian is computed.
+        """
+
+        # dQ without internal tensions
+        dQ0 = dt*(self.Q @ gradU) + np.sqrt(2*dt)*self.dW
+
+        # Inital Tensions
+        tensions = np.zeros(len(self))
+
+        dQ = build_dQ(dQ0, dt, self.Q, tensions)
+
+        # Update Q
+        new_Q = self.Q + dQ
+
+        for i in range(MAXITER):
+            # Cost function
+            f = np.sum((np.sum(new_Q**2, axis=1)-1.)**2)
+            print(i, f)
+
+            if f < LENGTH_TOL:
+                # Re normalise and exit loop
+                new_Q = new_Q/np.sqrt(np.sum(new_Q**2, axis=1)[:, None])
+                dQ = new_Q - self.Q
+                break
+            elif i == MAXITER - 1:
+                raise ConvergenceError(f"Could not converge in {MAXITER} "
+                                       "iterations.")
+
+            # Gradient (normalised by dt)
+            df = build_df(self.Q, new_Q)
+
+            # Diag Hessian (normalised by dt²)
+            d2f = build_d2f(self.Q, new_Q)
+
+            # Update tensions
+            tensions = tensions - 0.01*df/d2f/dt
+
+            dQ = build_dQ(dQ0, dt, self.Q, tensions)
+
+            # Update Q
+            new_Q = self.Q + dQ
+
+        self.dQ = dQ
+        self.tensions = tensions
+
     def measure(self):
         """Measure quantities from the systems.
 
@@ -282,3 +341,41 @@ def build_dQ(dQ0, dt, Q, tensions):
     dQ[-1] = dQ0[-1] + dt*(- 2*tensions[-1]*Q[-1]
                            + tensions[-2]*Q[-2])
     return dQ
+
+
+@jit(nopython=True)
+def build_df(Q, new_Q):
+    """Gradient of the cost function normalised by dt. See optim.lyx"""
+
+    df = np.empty(len(Q))
+    df[0] = 4*(-2*(np.sum(new_Q[0]**2)-1.)*np.sum(new_Q[0]*Q[0])
+               + (np.sum(new_Q[1]**2)-1.)*np.sum(new_Q[1]*Q[0])
+               )
+    for i in range(1, len(Q)-1):
+        df[i] = 4*((np.sum(new_Q[i-1]**2)-1.)*np.sum(new_Q[i-1]*Q[i])
+                   - 2*(np.sum(new_Q[i]**2)-1.)*np.sum(new_Q[i]*Q[i])
+                   + (np.sum(new_Q[i+1]**2)-1.)*np.sum(new_Q[i+1]*Q[i])
+                   )
+    df[-1] = 4*((np.sum(new_Q[-2]**2)-1.)*np.sum(new_Q[-2]*Q[-1])
+                - 2*(np.sum(new_Q[-1]**2)-1.)*np.sum(new_Q[-1]*Q[-1])
+                )
+    return df
+
+
+@jit(nopython=True)
+def build_d2f(Q, new_Q):
+    """Gradient of the cost function normalised by dt. See optim.lyx"""
+
+    d2f = np.empty(len(Q))
+    d2f[0] = 4*(4*(2*np.sum(new_Q[0]*Q[0])**2 + np.sum(new_Q[0]**2) - 1.)
+                + 2*np.sum(new_Q[1]*Q[0])**2 + np.sum(new_Q[1]**2) - 1.
+                )
+    for i in range(1, len(Q)-1):
+        d2f[i] = 4*(2*np.sum(new_Q[i-1]*Q[i])**2 + np.sum(new_Q[i-1]**2) - 1.
+                    + 4*(2*np.sum(new_Q[i]*Q[i])**2 + np.sum(new_Q[i]**2) - 1.)
+                    + 2*np.sum(new_Q[i+1]*Q[i])**2 + np.sum(new_Q[i+1]**2) - 1.
+                    )
+    d2f[-1] = 4*(2*np.sum(new_Q[-2]*Q[-1])**2 + np.sum(new_Q[-2]**2) - 1.
+                 + 4*(2*np.sum(new_Q[-1]*Q[-1])**2 + np.sum(new_Q[-1]**2) - 1.)
+                 )
+    return d2f

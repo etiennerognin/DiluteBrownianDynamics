@@ -1,0 +1,420 @@
+#LyX 2.2 created this file. For more info see http://www.lyx.org/
+\lyxformat 508
+\begin_document
+\begin_header
+\save_transient_properties true
+\origin unavailable
+\textclass article
+\use_default_options true
+\maintain_unincluded_children false
+\language english
+\language_package default
+\inputencoding auto
+\fontencoding global
+\font_roman "default" "default"
+\font_sans "default" "default"
+\font_typewriter "default" "default"
+\font_math "auto" "auto"
+\font_default_family default
+\use_non_tex_fonts false
+\font_sc false
+\font_osf false
+\font_sf_scale 100 100
+\font_tt_scale 100 100
+\graphics default
+\default_output_format default
+\output_sync 0
+\bibtex_command default
+\index_command default
+\paperfontsize default
+\use_hyperref false
+\papersize default
+\use_geometry false
+\use_package amsmath 1
+\use_package amssymb 1
+\use_package cancel 1
+\use_package esint 1
+\use_package mathdots 1
+\use_package mathtools 1
+\use_package mhchem 1
+\use_package stackrel 1
+\use_package stmaryrd 1
+\use_package undertilde 1
+\cite_engine basic
+\cite_engine_type default
+\biblio_style plain
+\use_bibtopic false
+\use_indices false
+\paperorientation portrait
+\suppress_date false
+\justification true
+\use_refstyle 1
+\index Index
+\shortcut idx
+\color #008000
+\end_index
+\secnumdepth 3
+\tocdepth 3
+\paragraph_separation indent
+\paragraph_indentation default
+\quotes_language english
+\papercolumns 1
+\papersides 1
+\paperpagestyle default
+\tracking_changes false
+\output_changes false
+\html_math_output 0
+\html_css_as_file 0
+\html_be_strict false
+\end_header
+
+\begin_body
+
+\begin_layout Section
+Solving Kramers chain as an optimisation problem
+\end_layout
+
+\begin_layout Standard
+We can write the change in 
+\begin_inset Formula $Q_{i}$
+\end_inset
+
+ as (all dimensionless):
+\begin_inset Formula 
+\[
+dQ_{i}=dK_{i}+dt\left(g_{i-1}Q_{i-1}-2g_{i}Q_{i}+g_{i+1}Q_{i+1}\right)
+\]
+
+\end_inset
+
+where 
+\begin_inset Formula $dK_{i}=Q_{i}\nabla U+dW_{i+1}-dW_{i}$
+\end_inset
+
+.
+ The constraint can be put in the form of a cost function:
+\begin_inset Formula 
+\[
+f=\sum_{i}\left(\left(Q_{i}+dQ_{i}\right)^{2}-1\right)^{2}
+\]
+
+\end_inset
+
+Let's look for the gradient:
+\begin_inset Formula 
+\[
+\begin{aligned}\frac{\partial f}{\partial g_{i}}= & 2\left(\left(Q_{i-1}+dQ_{i-1}\right)^{2}-1\right)2\left(Q_{i-1}+dQ_{i-1}\right)\cdot\frac{\partial dQ_{i-1}}{\partial g_{i}}\\
+ & +2\left(\left(Q_{i}+dQ_{i}\right)^{2}-1\right)2\left(Q_{i}+dQ_{i}\right)\cdot\frac{\partial dQ_{i}}{\partial g_{i}}\\
+ & +2\left(\left(Q_{i+1}+dQ_{i+1}\right)^{2}-1\right)2\left(Q_{i+1}+dQ_{i+1}\right)\cdot\frac{\partial dQ_{i+1}}{\partial g_{i}}\\
+= & 4dt\left(\left(Q_{i-1}^{+}\right)^{2}-1\right)Q_{i-1}^{+}\cdot Q_{i}\\
+ & -8dt\left(\left(Q_{i}^{+}\right)^{2}-1\right)Q_{i}^{+}\cdot Q_{i}\\
+ & +4dt\left(\left(Q_{i+1}^{+}\right)^{2}-1\right)Q_{i+1}^{+}\cdot Q_{i}
+\end{aligned}
+\]
+
+\end_inset
+
+and the diagonal of the Hessian:
+\begin_inset Formula 
+\[
+\begin{aligned}\frac{\partial\text{²}f}{\partial g_{i}^{2}}= & 4dt\left[2\left(Q_{i-1}^{+}\cdot\frac{\partial Q_{i-1}^{+}}{\partial g_{i}}\right)\left(Q_{i-1}^{+}\cdot Q_{i}\right)+\left(\left(Q_{i-1}^{+}\right)^{2}-1\right)\frac{\partial Q_{i-1}^{+}}{\partial g_{i}}\cdot Q_{i}\right]\\
+ & -8dt\left[2\left(Q_{i}^{+}\cdot\frac{\partial Q_{i}^{+}}{\partial g_{i}}\right)\left(Q_{i}^{+}\cdot Q_{i}\right)+\left(\left(Q_{i}^{+}\right)^{2}-1\right)\frac{\partial Q_{i}^{+}}{\partial g_{i}}\cdot Q_{i}\right]\\
+ & +4dt\left[2\left(Q_{i+1}^{+}\cdot\frac{\partial Q_{i+1}^{+}}{\partial g_{i}}\right)\left(Q_{i+1}^{+}\cdot Q_{i}\right)+\left(\left(Q_{i+1}^{+}\right)^{2}-1\right)\frac{\partial Q_{i+1}^{+}}{\partial g_{i}}\cdot Q_{i}\right]\\
+= & 4dt^{2}\left[2\left(Q_{i-1}^{+}\cdot Q_{i}\right)\left(Q_{i-1}^{+}\cdot Q_{i}\right)+\left(\left(Q_{i-1}^{+}\right)^{2}-1\right)Q_{i}\cdot Q_{i}\right]\\
+ & +16dt^{2}\left[2\left(Q_{i}^{+}\cdot Q_{i}\right)\left(Q_{i}^{+}\cdot Q_{i}\right)+\left(\left(Q_{i}^{+}\right)^{2}-1\right)Q_{i}\cdot Q_{i}\right]\\
+ & +4dt^{2}\left[2\left(Q_{i+1}^{+}\cdot Q_{i}\right)\left(Q_{i+1}^{+}\cdot Q_{i}\right)+\left(\left(Q_{i+1}^{+}\right)^{2}-1\right)Q_{i}\cdot Q_{i}\right]
+\end{aligned}
+\]
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Enumerate
+We can start with 
+\begin_inset Formula $dQ_{i}=dK_{i}$
+\end_inset
+
+ and 
+\begin_inset Formula $g_{i}=0$
+\end_inset
+
+ (unconstrained move)
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\begin_inset Formula $Q_{i}^{+}=Q_{i}+dQ_{i}$
+\end_inset
+
+.
+ If 
+\begin_inset Formula $f>\varepsilon$
+\end_inset
+
+:
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\family roman
+\series medium
+\shape up
+\size normal
+\emph off
+\bar no
+\strikeout off
+\uuline off
+\uwave off
+\noun off
+\color none
+
+\begin_inset Formula $\frac{\partial f}{\partial g_{i}}$
+\end_inset
+
+ and 
+\begin_inset Formula $\frac{\partial\text{²}f}{\partial g_{i}^{2}}$
+\end_inset
+
+
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\begin_inset Formula $g_{i}^{+}=g_{i}^{k}-\left(\frac{\partial\text{²}f}{\partial g_{i}^{2}}\right)^{-1}\frac{\partial f}{\partial g_{i}}$
+\end_inset
+
+
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\begin_inset Formula $dQ_{i}=dK_{i}+dt\left(g_{i-1}Q_{i-1}-2g_{i}Q_{i}+g_{i+1}Q_{i+1}\right)$
+\end_inset
+
+
+\end_layout
+
+\begin_layout Section
+Constrained FENE chain
+\end_layout
+
+\begin_layout Standard
+This time, the cost function is:
+\begin_inset Formula 
+\[
+f=\sum_{i}ReLU\left(\left|Q_{i}+dQ_{i}\right|-L_{\max}\right)
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\begin{aligned}\frac{\partial f}{\partial g_{i}}= & T_{i-1}\frac{Q_{i-1}^{+}}{\left|Q_{i-1}^{+}\right|}\cdot\frac{\partial dQ_{i-1}}{\partial g_{i}}+T_{i}\frac{Q_{i}^{+}}{\left|Q_{i}^{+}\right|}\cdot\frac{\partial dQ_{i}}{\partial g_{i}}+T_{i+1}\frac{Q_{i+1}^{+}}{\left|Q_{i+1}^{+}\right|}\cdot\frac{\partial dQ_{i+1}}{\partial g_{i}}\\
+= & dtQ_{i}\cdot\left(T_{i-1}\frac{Q_{i-1}^{+}}{\left|Q_{i-1}^{+}\right|}-2T_{i}\frac{Q_{i-1}^{+}}{\left|Q_{i-1}^{+}\right|}+T_{i+1}\frac{Q_{i-1}^{+}}{\left|Q_{i-1}^{+}\right|}\right)
+\end{aligned}
+\]
+
+\end_inset
+
+with the test vector 
+\begin_inset Formula $T_{i}=\left(Q_{i}^{+}\right)^{2}>L_{\max}^{2}$
+\end_inset
+
+ (0 if False, 1 if True)
+\begin_inset Formula 
+\[
+\begin{aligned}\frac{\partial^{2}f}{\partial g_{i}^{2}}= & dtQ_{i}\cdot\left(T_{i-1}\frac{\partial dQ_{i-1}}{\partial g_{i}}\frac{1}{\left|Q_{i-1}^{+}\right|}+T_{i-1}Q_{i-1}^{+}\frac{Q_{i-1}^{+}\cdot\frac{\partial dQ_{i-1}}{\partial g_{i}}}{\left|Q_{i-1}^{+}\right|^{3}}+...\right)\\
+= & dt^{2}\left(T_{i-1}\left(\frac{Q_{i}^{2}}{\left|Q_{i-1}^{+}\right|}+\frac{\left(Q_{i}\cdot Q_{i-1}^{+}\right)^{2}}{\left|Q_{i-1}^{+}\right|^{3}}\right)+4T_{i}\left(...\right)+T_{i-1}\left(...\right)\right)
+\end{aligned}
+\]
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Enumerate
+We can start with 
+\begin_inset Formula $g_{i}=\frac{L_{\max}^{2}}{L_{\max}^{2}-Q_{i}^{2}}$
+\end_inset
+
+ (naive move)
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\begin_inset Formula $Q_{i}^{+}=Q_{i}+dQ_{i}$
+\end_inset
+
+.
+ 
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\begin_inset Formula $T_{i}=\left(Q_{i}^{+}\right)^{2}>L_{\max}^{2}-\varepsilon$
+\end_inset
+
+.
+ While any 
+\begin_inset Formula $T_{i}$
+\end_inset
+
+:
+\end_layout
+
+\begin_deeper
+\begin_layout Enumerate
+Update 
+\family roman
+\series medium
+\shape up
+\size normal
+\emph off
+\bar no
+\strikeout off
+\uuline off
+\uwave off
+\noun off
+\color none
+
+\begin_inset Formula $\frac{\partial f}{\partial g_{i}}$
+\end_inset
+
+ and 
+\begin_inset Formula $\frac{\partial\text{²}f}{\partial g_{i}^{2}}$
+\end_inset
+
+
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\begin_inset Formula $g_{i}=g_{i}-\left(\frac{\partial\text{²}f}{\partial g_{i}^{2}}\right)^{-1}\frac{\partial f}{\partial g_{i}}$
+\end_inset
+
+
+\end_layout
+
+\begin_layout Enumerate
+Update (rescale) 
+\family roman
+\series medium
+\shape up
+\size normal
+\emph off
+\bar no
+\strikeout off
+\uuline off
+\uwave off
+\noun off
+\color none
+
+\begin_inset Formula $Q_{i}$
+\end_inset
+
+ so that 
+\begin_inset Formula $Q_{i}^{2}=L_{\max}^{2}\left(1-\frac{1}{g_{i}}\right)$
+\end_inset
+
+
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\family roman
+\series medium
+\shape up
+\size normal
+\emph off
+\bar no
+\strikeout off
+\uuline off
+\uwave off
+\noun off
+\color none
+
+\begin_inset Formula $dK_{i}$
+\end_inset
+
+ (this because 
+\begin_inset Formula $Q_{i}$
+\end_inset
+
+ has changed)
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\begin_inset Formula $dQ_{i}=dK_{i}+dt\left(g_{i-1}Q_{i-1}-2g_{i}Q_{i}+g_{i+1}Q_{i+1}\right)$
+\end_inset
+
+
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\begin_inset Formula $Q_{i}^{+}=Q_{i}+dQ_{i}$
+\end_inset
+
+.
+ 
+\end_layout
+
+\begin_layout Enumerate
+Update 
+\begin_inset Formula $T_{i}$
+\end_inset
+
+
+\end_layout
+
+\end_deeper
+\begin_layout Subsection
+V2
+\end_layout
+
+\begin_layout Standard
+the cost function is now still:
+\begin_inset Formula 
+\[
+f=\sum_{i}ReLU\left(\left|Q_{i}+dQ_{i}\right|-L_{\max}\right)
+\]
+
+\end_inset
+
+This time we differentiate with respect to 
+\begin_inset Formula $q=|Q|$
+\end_inset
+
+ while freezing directions of vectors:
+\end_layout
+
+\begin_layout Standard
+\begin_inset Formula 
+\[
+dQ_{i}=dK_{i}+dt\left(\frac{L_{\max}^{2}q_{i-1}}{L_{\max}^{2}-q_{i-1}^{2}}N_{i-1}-2\frac{L_{\max}^{2}q_{i}}{L_{\max}^{2}-q_{i}^{2}}N_{i}+\frac{L_{\max}^{2}q_{i+1}}{L_{\max}^{2}-q_{i+1}^{2}}N_{i+1}\right)
+\]
+
+\end_inset
+
+
+\begin_inset Formula 
+\[
+\begin{aligned}\frac{\partial f}{\partial q_{i}}= & \frac{T_{i-1}}{\left|Q_{i-1}^{+}\right|}\left(Q_{i-1}^{+}\cdot\frac{\partial dQ_{i-1}}{\partial q_{i}}\right)\\
+ & +\frac{T_{i}}{\left|Q_{i}^{+}\right|}\left(q_{i}+N_{i}\cdot dQ_{i}+Q_{i}^{+}\cdot\frac{\partial dQ_{i}}{\partial q_{i}}\right)\\
+ & \frac{T_{i+1}}{\left|Q_{i+1}^{+}\right|}\left(Q_{i+1}^{+}\cdot\frac{\partial dQ_{i+1}}{\partial q_{i}}\right)\\
+= & \frac{T_{i-1}}{\left|Q_{i-1}^{+}\right|}\left(Q_{i-1}^{+}\cdot\frac{\partial dQ_{i-1}}{\partial q_{i}}\right)
+\end{aligned}
+\]
+
+\end_inset
+
+
+\end_layout
+
+\end_body
+\end_document
