@@ -132,6 +132,7 @@ def simulate(molecule, gradU, dt, n_steps,
                 molecule.solve(gradUt, dt_local)
                 # Measure whatever the model is set to output.
                 subobs.append(molecule.measure())
+
                 weights.append(0.5**level/write_interval)
                 if full_trajectory and (first_subit and
                                         (i+1) % write_interval == 0):
@@ -153,7 +154,20 @@ def simulate(molecule, gradU, dt, n_steps,
                     raise RuntimeError("Convergence failed and maximum level "
                                        "of time step subdivision reached.")
         if (i+1) % write_interval == 0:
-            observables.append(_sum_dict(subobs, weights))
+            observable_now = _sum_dict(subobs, weights)
+
+            # Mechanochemistry hook
+            if 'g' in observable_now.keys():
+                g = observable_now.pop('g')
+                observable_now['g_max'] = np.amax(g)
+                observable_now['i_max'] = np.argmax(g)
+                if molecule.__class__.__name__ == 'AdaptiveKramersChain':
+                    observable_now['i_max'] += np.amax(np.sqrt(molecule.L2))-1
+                observable_now['g_13'] = g[len(g)//3]
+                observable_now['g_12'] = g[len(g)//2]
+                observable_now['g_23'] = g[2*len(g)//3]
+
+            observables.append(observable_now)
 
         if level > 0:
             level += -1

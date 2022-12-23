@@ -237,7 +237,11 @@ class KramersChainEVHI:
         moments = self.tensions[:, None, None]*(self.Q[:, :, None]
                                                 * self.Q[:, None, :])
         S = np.sum(moments, axis=0)
-        observables = {'A': A, 'S': S}
+
+        g = self.tensions
+
+        observables = {'A': A, 'S': S, 'g': g}
+
         return observables
 
     def evolve(self, first_subit):

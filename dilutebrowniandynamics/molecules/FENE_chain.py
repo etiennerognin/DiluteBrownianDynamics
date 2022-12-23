@@ -4,6 +4,7 @@ from scipy.linalg.lapack import dptsv
 
 from ..simulate import ConvergenceError
 
+DELTA_RIGID = 1e-2
 LENGTH_TOL = 1e-6
 MAXITER = 100
 
@@ -72,7 +73,7 @@ class FENEChain:
         norms = np.sqrt(np.sum(Q**2, axis=1))
         # Cleaning pass
         for i, L in enumerate(norms):
-            while L > L_max - LENGTH_TOL:
+            while L > L_max - DELTA_RIGID:
                 Q[i] = rng.standard_normal(3)
                 L = np.sqrt(np.sum(Q[i]**2))
 
@@ -95,6 +96,105 @@ class FENEChain:
     def solve(self, gradU, dt):
         """Solve tension according to current random forces and constraints."""
         Q2 = np.sum(self.Q**2, axis=1)
+        # All links are coiled, explicit solution should be safe
+        self.H = self.L_max**2/(self.L_max**2-Q2)
+
+        # Test chain lengths, True if link is close to coiled state
+        T = Q2 < (self.L_max - DELTA_RIGID)**2
+
+        if all(T):
+            # All links are coiled, explicit solution should be safe
+
+            # dQ without internal tensions
+            dQ0 = dt*(self.Q @ gradU) + np.sqrt(dt/2)*self.dW
+
+            # Complete
+            dQ = build_dQ(dQ0, dt, self.Q, self.H)
+
+            new_Q = self.Q + dQ
+
+            # Trigger adaptive time step if L_max is breached
+            if any(np.sum(new_Q**2, axis=1) > (self.L_max - LENGTH_TOL)**2):
+                raise ConvergenceError('Molecule length exceeded L_max.')
+
+            self.dQ = dQ
+            self.tensions = self.H*np.sqrt(Q2)
+
+        else:
+            print(f'Switch to rigid, dt={dt}')
+            with np.errstate(over='raise', invalid='raise'):
+                # Some links are extended and should be treated as rigid links.
+                try:
+                    dQ = np.zeros_like(self.Q)
+                    Q_star = self.Q.copy()
+                    for i in range(MAXITER):
+                        # Number of unknowns
+                        n_gs = np.sum(~T)
+
+                        # Right hand side
+                        # ---------------
+                        # For clarity we build the whole vectors and then trim
+                        dQ0 = dt*(Q_star @ gradU) + np.sqrt(dt/2)*self.dW
+                        RHS = 4*np.sum(dQ0*Q_star, axis=1)/dt
+                        RHS += 2*np.sum(dQ**2, axis=1)/dt
+
+                        # Low diagonal elements & upper diagonal elements
+                        dlu = - np.sum(Q_star[1:]*Q_star[:-1], axis=1)
+
+                        # Explicit links should be put to RHS
+                        RHS[:-1] += - self.H[:-1]*dlu*T[1:]
+                        RHS[1:] += - self.H[1:]*dlu*T[:-1]
+                        # And remove form Low/Up diagonals
+                        dlu = dlu*~T[1:]*~T[:-1]
+
+                        # Diagonal elements
+                        d = 2*Q2
+
+                        if n_gs > 1:
+                            # Solve the system, see NOTES
+                            g_by_Q = dptsv(d[~T], dlu[~T[:-1]][:-1], RHS[~T])[2]
+                        else:
+                            g_by_Q = RHS[~T]/d[~T]
+                        print(self.H[~T])
+                        print(g_by_Q)
+
+                        # New tension means rescaling Q for rigid links
+                        Q_star[~T] = Q_star[~T]/np.sqrt(Q2[~T])[:, None]
+                        Q2[~T] = self.L_max**2*(1.-1./g_by_Q)
+                        if any(Q2 < 0) or any(np.isnan(Q2)):
+                            print('neg or nan')
+                            raise ConvergenceError('dptsv convergence failed.')
+
+                        Q_star[~T] = np.sqrt(Q2[~T])[:, None]*Q_star[~T]
+
+                        # Update dQ
+                        self.H = self.L_max**2/(self.L_max**2-Q2)
+                        dQ0 = dt*(Q_star @ gradU) + np.sqrt(dt/2)*self.dW
+                        dQ = build_dQ(dQ0, dt, Q_star, self.H)
+
+                        # Compute new chain
+                        new_Q = Q_star + dQ
+
+                        print(i, np.amax(Q2), np.amax(np.sum(new_Q**2, axis=1)))
+                        print(i, np.argmax(Q2), np.argmax(np.sum(new_Q**2, axis=1)))
+                        error = np.abs(Q2[~T] - np.sum(new_Q[~T]**2, axis=1))
+                        print(error)
+                        if error < LENGTH_TOL**2:
+                            break
+
+                    if any(np.sum(new_Q**2, axis=1) > (self.L_max - LENGTH_TOL)**2):
+                        raise ConvergenceError('Molecule length exceeded L_max.')
+                    self.Q = Q_star
+                    self.dQ = dQ
+                    self.tensions = self.H*np.sqrt(Q2)
+                except FloatingPointError:
+                    raise ConvergenceError('dptsv convergence failed.')
+
+
+    def solve_optim(self, gradU, dt):
+        """Solve tension according to current random forces. Use gradient
+        descent to comply with maximum elongation"""
+        Q2 = np.sum(self.Q**2, axis=1)
         self.H = self.L_max**2/(self.L_max**2-Q2)
 
         # dQ without internal tensions
@@ -106,141 +206,50 @@ class FENEChain:
         new_Q = self.Q + dQ
 
         n_iter = 0
-        while any(np.sum(new_Q**2, axis=1) > self.L_max**2 - LENGTH_TOL):
-            # print(f"Switching to rigid constraint, iteration {n_iter}. dt={dt}")
-            Q_star = self.Q.copy()
+        # Test constraint vector
+        T = np.sum(new_Q**2, axis=1) > self.L_max**2 - LENGTH_TOL
 
+        while any(T):
+            print(n_iter, np.sum(T*(np.sum(new_Q**2, axis=1)-self.L_max**2+LENGTH_TOL)))
             if n_iter > MAXITER:
                 raise ConvergenceError('Molecule length exceeded L_max.')
             n_iter += 1
+            # Do one descent step
+            # Gradient (normalised by dt)
+            df = build_df(self.Q, new_Q, T)
+            #for grad, h in zip(df, self.H):
+            #    print(grad, h)
 
-            with np.errstate(over='raise', invalid='raise'):
-                try:
+            # Diag Hessian (normalised by dt²)
+            d2f = build_d2f(self.Q, T)
 
-                    # Freeze length and switch to rigid constraints, L2 is the
-                    # length
-                    # of links after the evolution step, therefore it should be
-                    # contrained.
-                    L2 = np.minimum(np.sum(new_Q**2, axis=1), self.L_max**2)
+            # Update tensions
+            self.H = self.H - 0.01*df
 
-                    # Right hand side
-                    # ---------------
-                    RHS = 4*np.sum(dQ0*self.Q, axis=1)/dt
-                    RHS += - 2*(L2-Q2-np.sum(dQ**2, axis=1))/dt
+            # Update Q
+            Q_star = self.Q.copy()
+            Q_star = Q_star/np.sqrt(Q2)[:, None]
+            Q2 = self.L_max**2*(1.-1./self.H)
+            if any(Q2 < 0) or any(np.isnan(Q2)):
+                print('Q2 negative')
+                raise ConvergenceError('Gradient descent failed.')
+            Q_star = np.sqrt(Q2)[:, None]*Q_star
 
-                    # Tridiagonal matrix
-                    # ------------------
-                    # Low diagonal elements & upper diagonal elements
-                    dlu = - np.sum(Q_star[1:]*Q_star[:-1], axis=1)
-                    # Diagonal elements
-                    d = 2*Q2
+            # Update dQ
+            dQ0 = dt*(Q_star @ gradU) + np.sqrt(dt/2)*self.dW
+            dQ = build_dQ(dQ0, dt, Q_star, self.H)
 
-                    # Solve the system, see NOTES
+            # Compute new chain
+            new_Q = Q_star + dQ
 
-                    g_by_Q = dptsv(d, dlu, RHS)[2]
+            # Update T
+            T = np.sum(new_Q**2, axis=1) > self.L_max**2 - LENGTH_TOL
 
-                    # New tension means rescaling Q
-                    Q_star = Q_star/np.sqrt(Q2)[:, None]
-                    Q2 = self.L_max**2*(1.-1./g_by_Q)
-                    if any(Q2 < 0) or any(np.isnan(Q2)):
-                        raise ConvergenceError('dptsv convergence failed.')
-
-                    Q_star = np.sqrt(Q2)[:, None]*Q_star
-
-                    # Update dQ
-                    self.H = g_by_Q
-                    dQ0 = dt*(Q_star @ gradU) + np.sqrt(dt/2)*self.dW
-                    dQ = build_dQ(dQ0, dt, Q_star, self.H)
-
-                    # Compute new chain
-                    new_Q = Q_star + dQ
-                    # print(f"Maximum length: {np.amax(np.sum(new_Q**2, axis=1))}")
-                except FloatingPointError:
-                    raise ConvergenceError('dptsv convergence failed.')
         if n_iter:
             self.Q = Q_star
+            print("Optim success")
         self.dQ = dQ
         self.tensions = self.H*np.sqrt(Q2)
-
-    def solve_rigid(self, gradU, dt, L2):
-        """Solve tension according to current random forces and constraints.
-
-        Parameters
-        ----------
-        gradU : (3, 3) ndarray
-            Velocity gradient, dvj/dxi convention.
-        dt : float
-            Time step.
-
-        Notes
-        -----
-        Scipy `linalg.lapack.dptsv` which does partial Gauss pivoting seems
-        to yield at least similar speed as compiled tridigonal algorithm
-        from 'Numerical Recipes' tridiagonal solver, which doesn't do pivoting
-        and requires smaller time step.
-        """
-        # Corresponding length
-        L = np.sqrt(L2)
-
-        # dQ without internal tensions (different scaling from Kramers chain)
-        dQ0 = dt*(self.Q @ gradU) + np.sqrt(dt/2)*self.dW
-
-        # Right hand side
-        # ---------------
-        RHS0 = np.sum(dQ0*self.Q, axis=1)/dt
-        RHS = RHS0.copy()
-
-        # Tridiagonal matrix
-        # ------------------
-        # Low diagonal elements & upper diagonal elements
-        dlu = - np.sum(self.Q[1:]*self.Q[:-1], axis=1)
-        # Diagonal elements
-        d = L2
-
-        for i in range(MAXITER):
-            with np.errstate(over='raise', invalid='raise'):
-                try:
-                    # Solve the system, see NOTES
-                    g_by_Q = dptsv(d, dlu, RHS)[2]
-
-                    # New tension means rescaling Q
-                    Q2 = self.L_max**2*(1.-1./g_by_Q)
-                    self.Q = np.sqrt(Q2)/L*self.Q
-
-                    dQ = build_dQ(dQ0, dt, self.Q, g_by_L)
-
-                    # Compute new chain
-                    new_Q = self.Q + dQ
-
-                    # Compute rod square lengths
-                    new_Q2 = np.sum(new_Q**2, axis=1)
-                    # And compare to target
-                    err = np.max(np.abs(new_Q2-L2))
-                    # update the right-hand-side
-                    RHS = RHS0 + 0.5/dt*np.sum(dQ**2, axis=1)
-                except FloatingPointError:
-                    if FLAG:
-                        print(f'dptsv convergence failed with dt={dt}.')
-                    raise ConvergenceError('dptsv convergence failed.')
-            if err < LENGTH_TOL:
-                # Re normalise and exit loop
-                new_Q = L[:, None]*new_Q/np.sqrt(new_Q2[:, None])
-                dQ = new_Q - self.Q
-                break
-            elif i == MAXITER - 1:
-                if FLAG:
-                    print(f"Could not converge in {MAXITER} "
-                          "iterations.")
-                raise ConvergenceError(f"Could not converge in {MAXITER} "
-                                       "iterations.")
-        self.dQ = dQ
-        self.tensions = g_by_L*L
-        if self.avg_tensions is None:
-            self.avg_tensions = dt*self.tensions
-            self.subit = dt
-        else:
-            self.avg_tensions += dt*self.tensions
-            self.subit += dt
 
     def measure(self):
         """Measure quantities from the systems.
@@ -352,3 +361,37 @@ def build_dQ(dQ0, dt, Q, H):
     dQ[-1] = dQ0[-1] + dt*(- 0.5*H[-1]*Q[-1]
                            + 0.25*H[-2]*Q[-2])
     return dQ
+
+
+@jit(nopython=True)
+def build_df(Q, new_Q, T):
+    """Gradient of the cost function normalised by dt. See optim.lyx"""
+
+    df = np.empty(len(Q))
+    N = new_Q.copy()
+    L = np.sqrt(np.sum(new_Q**2, axis=1))
+    for j in range(3):
+        N[:, j] = N[:, j]/L
+    df[0] = np.sum((-2*T[0]*N[0]+T[1]*N[1])*Q[0])
+    for i in range(1, len(Q)-1):
+        df[i] = np.sum((T[i-1]*N[i-1]-2*T[i]*N[i]+T[i+1]*N[i+1])*Q[i])
+    df[-1] = np.sum((T[-2]*N[-2]-2*T[-1]*N[-1])*Q[-1])
+    return df
+
+
+@jit(nopython=True)
+def build_d2f(Q, new_Q, T):
+    """Diagonal of the Hessian of the cost function normalised by dt.
+    See optim.lyx"""
+
+    d2f = np.empty(len(Q))
+    L = np.sqrt(np.sum(new_Q**2, axis=1))
+
+    d2f[0] = (4*T[0] + T[1])*np.sum(Q[0]**2)
+    for i in range(1, len(Q)-1):
+        d2f[i] = (T[i-1]*(np.sum(Q[i]**2)/L[i-1]+np.sum(Q[i]*new_Q[i-1])/L**3)
+                  + 4*T[i]*(np.sum(Q[i]**2)/L[i]+np.sum(Q[i]*new_Q[i])/L**3)
+                  + T[i+1]**(np.sum(Q[i]**2)/L[i+1]+np.sum(Q[i]*new_Q[i+1])/L**3)
+                  )
+    d2f[-1] = (T[-2] + 4*T[-1])*np.sum(Q[-1]**2)
+    return d2f
