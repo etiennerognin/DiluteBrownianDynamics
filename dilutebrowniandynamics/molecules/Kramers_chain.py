@@ -5,7 +5,9 @@ from numba import jit
 
 LENGTH_TOL = 1e-6
 MAXITER = 100
-FILTER_NOISE = True
+FILTER_NOISE = False
+BROWNIAN_FORCES = False
+STICKY_TOL = 0
 
 
 class KramersChain:
@@ -34,6 +36,7 @@ class KramersChain:
         self.rng = rng
         self.dW = self.stochastic_force()
         self.dQ = None
+        self.EV = excluded_volume(Q)
 
     def __len__(self):
         """Number of links in the chain"""
@@ -43,18 +46,21 @@ class KramersChain:
         """Draw random force. Noise filtering if applicable. Noise variance
         proportional to bead size."""
 
-        # Uncorrelated forces on beads...
-        Prior = self.rng.standard_normal((len(self)+1, 3))
+        if BROWNIAN_FORCES:
+            # Uncorrelated forces on beads...
+            Prior = self.rng.standard_normal((len(self)+1, 3))
 
-        if FILTER_NOISE:
-            # -- Noise reduction:
-            # For inner beads, keep component that is only normal to both links
-            # Note that vector products of aligned beads can be close to zero,
-            # therefore removing scalar products is preferred.
-            Prior = filter(self.Q, Prior)
+            if FILTER_NOISE:
+                # -- Noise reduction:
+                # For inner beads, keep component that is only normal to both links
+                # Note that vector products of aligned beads can be close to zero,
+                # therefore removing scalar products is preferred.
+                Prior = filter(self.Q, Prior)
 
-        # ...gives correlated Brownian force on rods:
-        return Prior[1:] - Prior[:-1]
+            # ...gives correlated Brownian force on rods:
+            return Prior[1:] - Prior[:-1]
+        else:
+            return np.zeros_like(self.Q)
 
     @classmethod
     def from_normal_distribution(cls, n_links, seed=np.random.SeedSequence()):
@@ -109,7 +115,7 @@ class KramersChain:
         """
 
         # dQ without internal tensions
-        dQ0 = dt*(self.Q @ gradU) + np.sqrt(2*dt)*self.dW
+        dQ0 = dt*(self.Q @ gradU + self.EV) + np.sqrt(2*dt)*self.dW
 
         # Right hand side
         # ---------------
@@ -133,10 +139,17 @@ class KramersChain:
 
                     # Compute new chain
                     new_Q = self.Q + dQ
+                    if STICKY_TOL:
+                        T = np.abs(new_Q[:,0]) > STICKY_TOL
+                        new_Q[:,0] *= T
+                        #for j, (p1, p2) in enumerate(zip(dlu[:-1], dlu[1:])):
+                        #    if p1 < 0 and p2 <0:
+                        #        new_Q[j+1][np.abs(new_Q[j+1]) < STICKY_TOL] = 0
 
                     # Compute rod square lengths
                     L = np.sum(new_Q**2, axis=1)
                     err = np.max(np.abs(L-1))
+
                     # update the right-hand-side
                     RHS = RHS0 + 0.5/dt*np.sum(dQ**2, axis=1)
                 except FloatingPointError:
@@ -186,6 +199,7 @@ class KramersChain:
             print(i, f)
 
             if f < LENGTH_TOL:
+
                 # Re normalise and exit loop
                 new_Q = new_Q/np.sqrt(np.sum(new_Q**2, axis=1)[:, None])
                 dQ = new_Q - self.Q
@@ -229,7 +243,8 @@ class KramersChain:
         moments = self.tensions[:, None, None]*(self.Q[:, :, None]
                                                 * self.Q[:, None, :])
         S = np.sum(moments, axis=0)
-        observables = {'A': A, 'S': S}
+        g = self.tensions
+        observables = {'A': A, 'S': S, 'g': g}
         return observables
 
     def evolve(self, **kwargs):
@@ -247,6 +262,7 @@ class KramersChain:
         # draw new random forces
         self.tensions = None
         self.dW = self.stochastic_force()
+        self.EV = excluded_volume(self.Q)
 
     def save_vtk(self, file_name):
         """Save the molecule in vtk 3d format. File can then be imported in
@@ -379,3 +395,24 @@ def build_d2f(Q, new_Q):
                  + 4*(2*np.sum(new_Q[-1]*Q[-1])**2 + np.sum(new_Q[-1]**2) - 1.)
                  )
     return d2f
+
+@jit(nopython=True)
+def excluded_volume(Q):
+    """Excluded volume force only with neighbours. Avoid stuck folds"""
+    # Distance vector between bead i and i+2
+    R = Q[:-1] + Q[1:]
+    R2 = np.sum(R**2, axis=1)
+    F = np.zeros_like(R)
+    for i in range(len(F)):
+        if R2[i] < 1.:
+            F[i] = -R[i]/R2[i]
+
+    EV = np.zeros_like(Q)
+    EV[0] = F[1] - F[0]
+    EV[1] = F[2] - F[0] - F[1]
+    for i in range(2, len(Q)-1):
+        EV[i] = F[i+1] - F[i-1] - (F[i] - F[i-2])
+    EV[-2] = - F[-2] - (F[-1] - F[-3])
+    EV[-1] = - F[-1] - (- F[-2])
+
+    return np.zeros_like(Q)

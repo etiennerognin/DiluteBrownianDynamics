@@ -7,7 +7,7 @@ LENGTH_TOL = 1e-6
 MAXITER = 100
 FILTER_NOISE = False
 MERGE_MAX_LEVEL = 6    # Maximum level of recursion for merging rods
-MERGE_THRESHOLD = 1000.  # Dimensionless tension required to merge segments
+MERGE_THRESHOLD = 2000.  # Dimensionless tension required to merge segments
 FLAG = False
 
 
@@ -68,7 +68,7 @@ class AdaptiveKramersChain:
             print(Prior)
 
         # ...gives correlated Brownian force on rods:
-        return Prior[1:] - Prior[:-1]
+        return 0*(Prior[1:] - Prior[:-1])
 
     def __len__(self):
         """Number of links in the chain"""
