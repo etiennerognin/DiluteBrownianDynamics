@@ -5,7 +5,8 @@ from numba import jit
 
 LENGTH_TOL = 1e-6
 MAXITER = 100
-FILTER_NOISE = False
+FILTER_NOISE = True
+BROWNIAN_FORCES = True
 MERGE_MAX_LEVEL = 6    # Maximum level of recursion for merging rods
 MERGE_THRESHOLD = 2000.  # Dimensionless tension required to merge segments
 FLAG = False
@@ -53,6 +54,8 @@ class AdaptiveKramersChain:
     def stochastic_force(self):
         """Draw random force. Noise filtering if applicable. Noise variance
         proportional to bead size."""
+        if not BROWNIAN_FORCES:
+            return 0
 
         # Uncorrelated forces on beads...
         w = self.beads
@@ -63,12 +66,10 @@ class AdaptiveKramersChain:
             # For inner beads, keep component that is only normal to both links
             # Note that vector products of aligned beads can be close to zero,
             # therefore removing scalar products is preferred.
-            print(Prior)
-            Prior = filter(self.Q, Prior)
-            print(Prior)
+            Prior = filter(Prior, self.Q)
 
         # ...gives correlated Brownian force on rods:
-        return 0*(Prior[1:] - Prior[:-1])
+        return (Prior[1:] - Prior[:-1])
 
     def __len__(self):
         """Number of links in the chain"""
@@ -386,7 +387,7 @@ class AdaptiveKramersChain:
 
 
 @jit(nopython=True)
-def filter(Qs, forces):
+def filter(Prior, Q):
     """Filter forces to keep only orthogonal part"""
     # Numpy implementation
     # --------------------
@@ -400,15 +401,21 @@ def filter(Qs, forces):
 
     # Numba
     # -----
-    alpha = np.ones(len(forces))
+    Prior[0] = Prior[0] - np.sum(Prior[0]*Q[0])*Q[0]/np.sum(Q[0]**2)
 
-    for i in range(1, len(forces)):
-        alpha[i] = (np.sum((forces[i]-forces[i-1])*Qs[i-1]) + alpha[i-1]*np.sum(Qs[i-1]**2))/np.sum(Qs[i-1]*Qs[i])
+    cross = np.cross(Q[:-1], Q[1:])
+    for i in range(len(cross)):
+        c2 = np.sum(cross[i]**2)
+        if c2 > LENGTH_TOL:
+            Prior[i+1] = np.sum(Prior[i+1]*cross[i])*cross[i]/c2
+        else:
+            Prior[i+1] = (Prior[i+1]
+                          - np.sum(Prior[i+1]*Q[i])*Q[i]/np.sum(Q[i]**2)
+                          )
 
-    for i in range(len(forces)):
-        forces[i] = forces[i] - alpha[i]*Qs[i]
+    Prior[-1] = Prior[-1] - np.sum(Prior[-1]*Q[-1])*Q[-1]/np.sum(Q[-1]**2)
 
-    return forces
+    return Prior
 
 
 @jit(nopython=True)

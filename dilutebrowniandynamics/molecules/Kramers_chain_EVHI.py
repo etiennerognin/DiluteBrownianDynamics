@@ -7,6 +7,8 @@ from numba import jit
 LENGTH_TOL = 1e-6
 MAXITER = 100
 FILTER_NOISE = True
+BROWNIAN_FORCES = False
+UNIAXIAL = True
 
 
 class KramersChainEVHI:
@@ -52,6 +54,9 @@ class KramersChainEVHI:
     def stochastic_force(self):
         """Draw random force. Noise filtering if applicable. Noise variance
         proportional to bead size."""
+
+        if not BROWNIAN_FORCES:
+            return 0
 
         # Uncorrelated forces on beads...
         Prior = self.rng.standard_normal((len(self)+1, 3))
@@ -257,6 +262,16 @@ class KramersChainEVHI:
         """
         self.Q += self.dQ
         self.tensions = None
+
+        if UNIAXIAL:
+            # Hook to perfectly align stretched molecules
+            R = np.sqrt(np.sum(self.REE**2))
+            if R > len(self) - 0.1:
+                # print('Elongated')
+                self.Q = np.zeros_like(self.Q)
+                self.Q[:, 0] = 1.
+
+        # self._M = None
 
         if first_subit:
             self.avg_tensions = None

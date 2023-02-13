@@ -5,9 +5,10 @@ from numba import jit
 
 LENGTH_TOL = 1e-6
 MAXITER = 100
-FILTER_NOISE = False
+FILTER_NOISE = True
 BROWNIAN_FORCES = False
 STICKY_TOL = 0
+UNIAXIAL = True
 
 
 class KramersChain:
@@ -46,21 +47,21 @@ class KramersChain:
         """Draw random force. Noise filtering if applicable. Noise variance
         proportional to bead size."""
 
-        if BROWNIAN_FORCES:
-            # Uncorrelated forces on beads...
-            Prior = self.rng.standard_normal((len(self)+1, 3))
+        if not BROWNIAN_FORCES:
+            return 0
 
-            if FILTER_NOISE:
-                # -- Noise reduction:
-                # For inner beads, keep component that is only normal to both links
-                # Note that vector products of aligned beads can be close to zero,
-                # therefore removing scalar products is preferred.
-                Prior = filter(self.Q, Prior)
+        # Uncorrelated forces on beads...
+        Prior = self.rng.standard_normal((len(self)+1, 3))
 
-            # ...gives correlated Brownian force on rods:
-            return Prior[1:] - Prior[:-1]
-        else:
-            return np.zeros_like(self.Q)
+        if FILTER_NOISE:
+            # -- Noise reduction:
+            # For inner beads, keep component that is only normal to both links
+            # Note that vector products of aligned beads can be close to zero,
+            # therefore removing scalar products is preferred.
+            Prior = filter(Prior, self.Q)
+
+        # ...gives correlated Brownian force on rods:
+        return Prior[1:] - Prior[:-1]
 
     @classmethod
     def from_normal_distribution(cls, n_links, seed=np.random.SeedSequence()):
@@ -259,6 +260,15 @@ class KramersChain:
             Time step.
         """
         self.Q += self.dQ
+
+        if UNIAXIAL:
+            # Hook to perfectly align stretched molecules
+            R = np.sqrt(np.sum(self.REE**2))
+            if R > len(self) - 0.1:
+                # print('Elongated')
+                self.Q = np.zeros_like(self.Q)
+                self.Q[:, 0] = 1.
+
         # draw new random forces
         self.tensions = None
         self.dW = self.stochastic_force()
@@ -306,7 +316,7 @@ class KramersChain:
 
 
 @jit(nopython=True)
-def filter(Qs, forces):
+def filter(Prior, Q):
     """Filter forces to keep only orthogonal part"""
     # Numpy implementation
     # --------------------
@@ -320,14 +330,21 @@ def filter(Qs, forces):
 
     # Numba
     # -----
-    forces[0] = forces[0] - np.sum(forces[0]*Qs[0])*Qs[0]
-    for i in range(1, len(forces)-1):
-        forces[i] = (forces[i]
-                     - np.sum(forces[i]*Qs[i])*Qs[i]
-                     - np.sum(forces[i]*Qs[i-1])*Qs[i-1]
-                     )
-    forces[-1] = forces[-1] - np.sum(forces[-1]*Qs[-1])*Qs[-1]
-    return forces
+    Prior[0] = Prior[0] - np.sum(Prior[0]*Q[0])*Q[0]/np.sum(Q[0]**2)
+
+    cross = np.cross(Q[:-1], Q[1:])
+    for i in range(len(cross)):
+        c2 = np.sum(cross[i]**2)
+        if c2 > LENGTH_TOL:
+            Prior[i+1] = np.sum(Prior[i+1]*cross[i])*cross[i]/c2
+        else:
+            Prior[i+1] = (Prior[i+1]
+                          - np.sum(Prior[i+1]*Q[i])*Q[i]/np.sum(Q[i]**2)
+                          )
+
+    Prior[-1] = Prior[-1] - np.sum(Prior[-1]*Q[-1])*Q[-1]/np.sum(Q[-1]**2)
+
+    return Prior
 
 
 @jit(nopython=True)
