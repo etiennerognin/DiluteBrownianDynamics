@@ -6,9 +6,9 @@ from numba import jit
 LENGTH_TOL = 1e-6
 MAXITER = 100
 FILTER_NOISE = True
-BROWNIAN_FORCES = False
+BROWNIAN_FORCES = True
 STICKY_TOL = 0
-UNIAXIAL = True
+UNIAXIAL = False
 
 
 class KramersChain:
