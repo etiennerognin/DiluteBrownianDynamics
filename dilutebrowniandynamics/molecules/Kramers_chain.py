@@ -141,11 +141,11 @@ class KramersChain:
                     # Compute new chain
                     new_Q = self.Q + dQ
                     if STICKY_TOL:
-                        T = np.abs(new_Q[:,0]) > STICKY_TOL
-                        new_Q[:,0] *= T
-                        #for j, (p1, p2) in enumerate(zip(dlu[:-1], dlu[1:])):
+                        T = np.abs(new_Q[:, 0]) > STICKY_TOL
+                        new_Q[:, 0] *= T
+                        # for j, (p1, p2) in enumerate(zip(dlu[:-1], dlu[1:])):
                         #    if p1 < 0 and p2 <0:
-                        #        new_Q[j+1][np.abs(new_Q[j+1]) < STICKY_TOL] = 0
+                        #        new_Q[j+1][np.abs(new_Q[j+1]) < STICKY_TOL]=0
 
                     # Compute rod square lengths
                     L = np.sum(new_Q**2, axis=1)
@@ -412,6 +412,7 @@ def build_d2f(Q, new_Q):
                  + 4*(2*np.sum(new_Q[-1]*Q[-1])**2 + np.sum(new_Q[-1]**2) - 1.)
                  )
     return d2f
+
 
 @jit(nopython=True)
 def excluded_volume(Q):
